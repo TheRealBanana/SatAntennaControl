@@ -1,9 +1,11 @@
-_VERSION_ = 0.1
+_VERSION_ = 0.2
 
 import RPi.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
 from time import sleep, time
-import threading
+from pyorbital import orbital
+import threading, re
+
 
 PWM_FREQUENCY = 2000
 
@@ -155,6 +157,10 @@ class ElMotorControl(threading.Thread):
         # what the commanded angle is vs our current angle. Speed and direction to be calculated every loop iteration.
         self.commanded_angle = EL_PARK_ANGLE #Starting at park since we go there after calibrating.
         self.quitting = False
+        self.homed = False # So we can check when the homing processes ends
+        self.stop_movement = False # For estop
+        self.speed = 100 # So we can modulate move speed from the command line
+
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_commanded_angle() loop
     def run(self):
@@ -164,7 +170,8 @@ class ElMotorControl(threading.Thread):
         #How many operations per second should the loop run at? Default value is 100 times per second. Could probably get away with less.
         ops = 100
         while self.quitting is False:
-            self.move_to_commanded_angle()
+            if self.homed is True and self.stop_movement is False:
+                self.move_to_commanded_angle()
             #print(" "*100, end="\r")
             #print("Current angle: %s degrees [%s]" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick()), end="\r")
             sleep(1.0/ops)
@@ -223,7 +230,7 @@ class ElMotorControl(threading.Thread):
         #The old move_to_angle() function has some good constants that we can follow for now.
         #Ideally we would use a single function or proportionality constant to set the speed based on distance to target.
         #That would require tuning and I know those duty cycle constants more or less work. Only minor adjustments needed.
-        movespeed = 100 # PWM duty cycle is between 0 and 100
+        movespeed = self.speed # PWM duty cycle is between 0 and 100
         if anglediff > 5:
             pass # no slowdown, 100 duty cycle
         elif anglediff > 2: # Between 5 and 2 degrees, first slowdown
@@ -363,6 +370,7 @@ class ElMotorControl(threading.Thread):
     #up to slowly find the precise location of the yellow endstop. When it finds it, it takes the total number of ticks
     # and divides it by 2 to find the middle. If the endstops are symmetrical in their positions, that middle should be 90 degrees vertical.
     def calhome(self):
+        self.homed = False
         self.move_until_stop(direction=2)
         self.move_motor_dir1()
         sleep(1)
@@ -387,6 +395,7 @@ class ElMotorControl(threading.Thread):
         #Turns out with my specific system theres some slop SOMEWHERE and its actually about 89 degrees. Some minute different in the endstops. Gotta find a better way.
         #self.encoder.set_encoder_angle(89)
         self.encoder.set_encoder_angle(self.angle_fuzz)
+        self.homed = True
 
 
 
@@ -409,6 +418,9 @@ class AzMotorControl(threading.Thread):
         GPIO.setup(self.he_sensor, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         self.commanded_angle = AZ_PARK_ANGLE #Starting at park since we go there after calibrating.
         self.quitting = False
+        self.homed = False
+        self.stop_movement = False
+        self.speed = 100
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_command_angle() loop
     def run(self):
@@ -416,7 +428,10 @@ class AzMotorControl(threading.Thread):
         print("\n\n")
         ops = 100
         while self.quitting is False:
-            self.move_to_commanded_angle()
+            #If we decided to re-home the axis, we don't want our loop overriding its commands. We also don't really want
+            #to have to destroy and re-create the thread so this just stops our commands while being homed.
+            if self.homed is True and self.stop_movement is False:
+                self.move_to_commanded_angle()
             #print(" "*100, end="\r")
             #print("Current angle: %s degrees [%s]" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick()), end="\r")
             sleep(1.0/ops)
@@ -450,7 +465,7 @@ class AzMotorControl(threading.Thread):
             self.stop_motor()
             return # Can't reach exact commanded value because its between the smallest increment we can detect.
 
-        movespeed = 100 # PWM duty cycle is between 0 and 100
+        movespeed = self.speed # PWM duty cycle is between 0 and 100
         if anglediff > 5:
             pass # no slowdown, 100 duty cycle
         elif anglediff > 2: # Between 5 and 2 degrees, first slowdown
@@ -537,7 +552,6 @@ class AzMotorControl(threading.Thread):
                         addtext = " - HE SEN ACTIVE"
                     else:
                         addtext = ""
-                    print("")
                     print(" "*100, end="\r") # Blank out the line before reprinting, otherwise old crap can be left behind
                     print("Current angle: %s degrees [%s] %s" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick(), addtext), end="\r")
 
@@ -551,6 +565,7 @@ class AzMotorControl(threading.Thread):
         print("Final angle: %s degrees [%s]" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick()))
 
     def find_home(self):
+        self.homed = False
         #Rough home at high speed
         self.move_until_stop()
         #Not sure this helps accuracy much but I think for consistency its a good idea
@@ -564,51 +579,164 @@ class AzMotorControl(threading.Thread):
         print("\nFound final home position! Resetting counters. Be warned that endstops are not used to prevent over-travel on the azimuth axis.")
         #Reset encoder position for the final time, should be an accurate and repeatable zero.
         self.encoder.reset_position()
+        self.homed = True
 
 
 def terminal_interface(azmc, elmc):
+    print("Homing each axis separately, starting with the azimuth.")
+    #Starting the thread initiates the homing processes and then waits for changes to its commanded angle
+    azmc.start()
+    #Wait for home to finish
+    while azmc.homed is False:
+        sleep(0.1)
+    elmc.start()
+    while elmc.homed is False:
+        sleep(0.1)
+
+    print("Finished homing axes, starting user input loop...\n")
+
+    command = ""
+    args = ""
     inp = ""
     while inp.lower() != "quit" and inp.lower() != "q":
-        inp = input("CMD: ").strip().lower()
-        if inp == "p" or inp == "pos" or inp == "position":
-            print("Current mast position is: %s degrees [%s]\n" % (motorcontrol.encoder.getCurrentAngle(), motorcontrol.encoder.getCurrentTick()))
+        #Allow internal loop bypass
+        if inp == "BYPASS": #Bypassing user input and directly activating another command.
+            inp = ""
+        else:
+            inp = input("CMD: ").strip().lower()
+            inpsplit = re.split(" ", inp)
+            command = inpsplit[0]
+            args = " ".join(inpsplit[1:])
 
-        elif inp == "h" or inp == "home":
-            print("Finding home position, current position is: %s degrees [%s]\n" % (motorcontrol.encoder.getCurrentAngle(), motorcontrol.encoder.getCurrentTick()))
-            motorcontrol.find_home()
-
-        elif inp[:2] == "go" or inp[:2] == "sg":
-            inputangle = inp[3:]
-            try:
-                inputangle = int(inputangle)
-            except:
-                print("Incorrect format, command requires a number between 0 and 190. E.g. GO 95  would turn to 95 degrees\n")
-                continue
-            if inputangle < 0 or inputangle > MAX_AZ_INPUT_ANGLE:
-                print("Angle out of range, must be between 0 and 190.\n")
-                continue
-            #Convert angle to tick number
-            angletick = round(inputangle / AZ_ANGLE_TICK)
-
-            printstr = "Rotating antenna mast to %s degrees [%s]...\n" % (inputangle, angletick)
-            if inp[:2] == "sg": #Slow movement mode
-                movespeed = 25 # This is the duty cycle, 0-100
-                printstr = "Slowly r" + printstr[1:]
+        if command == "p" or command == "pos" or command == "position":
+            #Determine what axis we asked about
+            if args == "az":
+                print("Current mast position is: %s degrees [%s]\n" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick()))
+            elif args == "el":
+                print("Current antenna elevation is: %s degrees [%s]\n" % (elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
+            elif args == "":
+                print("Current position of azimuth and elevation is: %s [%s]  -  %s [%s]" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick(), elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
             else:
+                print("Invalid argument, either 'az' or 'el' should be passed to the position command or nothing at all.")
+
+        elif command == "h" or command == "home":
+            if args == "az":
+                print("Finding mast home position, current position is: %s degrees [%s]\n" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick()))
+                azmc.find_home()
+            elif args == "el":
+                print("Finding antenna elevation home position, current position is: %s degrees [%s]\n" % (elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
+                elmc.calhome()
+            else:
+                print("Invalid argument, either 'az' or 'el' should be passed to this command.")
+
+        #Pause movement, soft-stop
+        #Currently we just set the commanded angle to whatever the angle currently is
+        elif command == "pause":
+            if args == "az":
+                print("Pausing movement on the azimuth axis at %s degrees" % azmc.encoder.curangle)
+                azmc.commanded_angle = azmc.encoder.curangle
+            elif args == "el":
+                print("Pausing movement on the elevation axis at %s degrees" % elmc.encoder.curangle)
+                elmc.commanded_angle = elmc.encoder.curangle
+            elif args == "": #Pause both
+                print("Pausing azimuth and elevation axis at AZ%s EL%s" % (azmc.encoder.curangle, elmc.encoder.curangle))
+                azmc.commanded_angle = azmc.encoder.curangle
+                elmc.commanded_angle = elmc.encoder.curangle
+            else:
+                print("Invalid argument, either 'az' or 'el' should be passed to this command.")
+
+        #More of a hard-stop, just interrupt the command function loop
+        elif command == "estop":
+            print("Commanded both axes to stop movement now...")
+            azmc.stop_movement = True
+            elmc.stop_movement = True
+
+        #ONLY WAY TO RESUME FROM AN ESTOP BESIDES RESTARTING IS THIS COMMAND!
+        #NO OTHER COMMANDS WILL WORK AFTER AN ESTOP UNTIL YOU DO THIS
+        elif command == "estart":
+            print("Restarting movement for both axes...")
+            azmc.stop_movement = False
+            elmc.stop_movement = False
+
+        #Move command format:
+        #go az101.64 el95
+        #Can commit az or el and move just one axis
+        #should be tolerant of spaces between az and the numbers
+        #should be tolerant of both ints and floats, possibly mixed
+        #should be tolerant of leading zeros.
+        #should be tolerant of transposing commands (el before az)
+        elif command == "go" or command == "sgo":
+            azangle = None
+            elangle = None
+            azcommand = re.search("az ?([0-9]{1,3}(?:\.[0-9]{1,3})?)", args)
+            if azcommand is not None:
+                azangle = float(azcommand.group(1))
+                if abs(azangle) < MAX_AZ_INPUT_ANGLE:
+                    aztick = round(azangle / azmc.encoder.ANGLE_TICK)
+                    aztext = "azimuth axis to %s degrees [%s]" % (azangle, aztick)
+                else:
+                    print("Invalid azimuth angle of %s degrees (Current limit is %s), not commanding any movements" % (azangle, MAX_AZ_INPUT_ANGLE))
+                    continue
+            else:
+                aztext = ""
+            elcommand = re.search("el ?([0-9]{1,3}(?:\.[0-9]{1,3})?)", args)
+            if elcommand is not None:
+                elangle = float(elcommand.group(1))
+                if abs(elangle) < MAX_EL_INPUT_ANGLE:
+                    eltick = round(elangle / elmc.encoder.ANGLE_TICK)
+                    eltext = "elevation axis to %s degrees [%s]" % (elangle, eltick)
+                else:
+                    print("Invalid elevation angle of %s degrees (Current limit is %s), not commanding any movements" % (elangle, MAX_EL_INPUT_ANGLE))
+                    continue
+                if len(aztext) > 0:
+                    eltext = " and " + eltext
+            else:
+                eltext = ""
+
+            if command == "go":
                 movespeed = 100
-            print(printstr)
-            motorcontrol.move_to_angle(inputangle, movespeed)
-        elif inp == "d1":
+                cmdtext = "Moving the "
+            else: #slow go command
+                movespeed = 25
+                cmdtext = "Slowly moving the "
+
+            curpostext = " (current pos: AZ%s - EL%s)" % (azmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentAngle())
+            outputtext = cmdtext + aztext + eltext + curpostext
+            print(outputtext)
+            #Our new movement system is closed loop without any feedback. We now have a separate command to watch
+            #the movement progress called 'watch'.
+            #After setting the movement position we will directly go to watch mode.
+            if azangle is not None:
+                azmc.speed = movespeed
+                azmc.commanded_angle = azangle
+            if elangle is not None:
+                elmc.speed = movespeed
+                elmc.commanded_angle = elangle
+            #Go straight to watch mode
+            inp = "BYPASS"
+            command = "watch"
+
+        elif command == "w" or command == "watch":
             try:
-                motorcontrol.move_motor_dir1()
-            except:
-                pass
-        elif inp == "d2":
-            try:
-                motorcontrol.move_motor_dir2()
-            except:
-                pass
-        elif inp == "v" or inp == "version":
+                while True:
+                    print(" "*100, end="\r") #Blanking line 100 chars long
+                    print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
+                    sleep(0.1)
+            except KeyboardInterrupt:
+                print("\n")
+                continue
+#        elif inp == "d1":
+#            try:
+#                motorcontrol.move_motor_dir1()
+#            except:
+#                pass
+#        elif inp == "d2":
+#            try:
+#                motorcontrol.move_motor_dir2()
+#            except:
+#                pass
+
+        elif command == "v" or command == "version":
             print("Antenna Control version %s" % _VERSION_)
 
         sleep(0.5)
@@ -616,12 +744,13 @@ def terminal_interface(azmc, elmc):
 def main():
     print("Welcome to Satellite Antenna Control v%s!" % _VERSION_)
     print("Setting up board and homing axes...")
+    sleep(3)
 
     azmc = AzMotorControl()
     elmc = ElMotorControl()
 
     try:
-        #Now we're zero'd up, we can accept commands from the user as to where we should turn
+        #Start the terminal interface, which will also handle homing and starting the threads
         terminal_interface(azmc, elmc)
     except:
         import traceback
