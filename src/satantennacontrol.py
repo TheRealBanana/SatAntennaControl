@@ -12,10 +12,10 @@ import threading, re, os, os.path, pytz
 #NEEDED FOR SATELLITE TRACKING!
 
 
-#Wrightwood
+
 ANTENNA_GPS_LAT = 34
 ANTENNA_GPS_LONG = -117
-ANTENNA_GPS_ALT = 1.776 # in kilometers
+ANTENNA_GPS_ALT = 0 # in kilometers
 
 PWM_FREQUENCY = 2000
 
