@@ -3,9 +3,19 @@ _VERSION_ = 0.2
 import RPi.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
 from time import sleep, time
+from datetime import datetime
+from urllib.request import urlretrieve
 from pyorbital import orbital
-import threading, re
+import threading, re, os, os.path, pytz
 
+
+#NEEDED FOR SATELLITE TRACKING!
+
+
+#Wrightwood
+ANTENNA_GPS_LAT = 34
+ANTENNA_GPS_LONG = -117
+ANTENNA_GPS_ALT = 1.776 # in kilometers
 
 PWM_FREQUENCY = 2000
 
@@ -583,6 +593,8 @@ class AzMotorControl(threading.Thread):
 
 
 def terminal_interface(azmc, elmc):
+    satfind = SatFinder()
+
     print("Homing each axis separately, starting with the azimuth.")
     #Starting the thread initiates the homing processes and then waits for changes to its commanded angle
     azmc.start()
@@ -693,6 +705,10 @@ def terminal_interface(azmc, elmc):
             else:
                 eltext = ""
 
+            #Dont do anything if we dont have anything
+            if elcommand is None and azcommand is None:
+                return
+
             if command == "go":
                 movespeed = 100
                 cmdtext = "Moving the "
@@ -725,21 +741,149 @@ def terminal_interface(azmc, elmc):
             except KeyboardInterrupt:
                 print("\n")
                 continue
-#        elif inp == "d1":
-#            try:
-#                motorcontrol.move_motor_dir1()
-#            except:
-#                pass
-#        elif inp == "d2":
-#            try:
-#                motorcontrol.move_motor_dir2()
-#            except:
-#                pass
 
         elif command == "v" or command == "version":
             print("Antenna Control version %s" % _VERSION_)
 
+        elif command == "satlist":
+            satfind.satlist()
+
+        elif command == "passlist": # Generate a 24 hour passlist for a specific satellite
+            if len(args) == 0:
+                print("You must include a satellite name to list passes for!")
+                continue
+            passes = satfind.passlist(args)
+            if passes is not None:
+                satparams = satfind.getsatparams(args)
+                satfind.printpasses(satparams, passes)
+
+        elif command == "track":
+            if len(args) == 0:
+                print("You must include a satellite name to track!")
+                continue
+            satparams = satfind.getsatparams(args)
+            passes = satfind.passlist(args)
+            if passes is None:
+                continue
+            satfind.printpasses(satparams, passes)
+            selectedpass = input("Select a pass number to track: ")
+            if selectedpass.isdigit() is False:
+                print("Selection must be a digit")
+                continue
+            if int(selectedpass) > len(passes):
+                print("Selection out of range")
+                continue
+            passdata = passes[int(selectedpass)]
+            localtz = passdata[0].astimezone()
+            starttime = localtz - datetime.now().astimezone()
+            startimetext = create_time_string(starttime.total_seconds())
+            max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+            eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
+            print("Selected pass #%s, %s%s MEL, starting in %s." % (selectedpass, round(max_location[1]), eastwest, startimetext))
+            #Find the start location for this pass
+            (startaz, startel) = satparams.get_observer_look(passdata[0], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+            startmove = input("Starting position for this pass is at Az%s El%s. Move to start position and wait to track (Y/N)? " % (round(startaz, 3), round(startel, 3))).lower()
+            if startmove == "n":
+                print("Canceling tracking...")
+                continue
+            elif startmove == "y":
+                print("Moving to starting position and waiting for track...")
+                azmc.commanded_angle = startaz
+                elmc.commanded_angle = startel
+                print("NOT ACTUALLY DOING ANYTHING FIXME TODO")
+                continue
+
+
+
+        #End of while loop
         sleep(0.5)
+
+
+class SatFinder:
+    def __init__(self):
+        self.satnames = []
+        self.updatetle()
+        self.updatesatnames()
+
+    def satlist(self):
+        print("Satellites in TLE file:")
+        for sat in self.satnames:
+            print(sat)
+
+    def printpasses(self, satparams, passlist):
+        #Go over the list and pull out some details, then print each one
+        for i, passdata in enumerate(passlist):
+            localtz = passdata[0].astimezone()
+            nicestarttime = localtz.strftime("%Y-%m-%d %H:%M:%S")
+            starttime = localtz - datetime.now().astimezone()
+            durationtext = create_time_string((passdata[1] - passdata[0]).total_seconds())
+            startimetext = create_time_string(starttime.total_seconds())
+            max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+            eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
+            print("%s) %s - %s%s degree MEL pass (Az %s) in %s - duration %s" % (i, nicestarttime, round(max_location[1]), eastwest, round(max_location[0]), startimetext, durationtext))
+
+    def passlist(self, satname):
+        satparams = self.getsatparams(satname)
+        if satparams is None:
+            return None
+        passlist = satparams.get_next_passes(datetime.now(pytz.utc), 24, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT) #Next 24 hours
+        if len(passlist) > 0:
+            print("Found %s passes in the next 24 hours for '%s'." % (len(passlist), satname))
+        else:
+            print("No passes for %s in the next 24 hours using current TLE data." % satname)
+            return None
+        return passlist
+
+    def getsatparams(self, satname):
+        #Check if the satellite exists
+        try:
+            satparams = orbital.Orbital(satname, tle_file="weather.txt")
+        except:
+            print("Couldn't find satellite '%s' in TLE file. Use the 'satlist' command to see a list of available satellites." % satname)
+            return None
+        return satparams
+
+
+    def updatesatnames(self):
+        self.satnames = []
+        with open("weather.txt", "r") as tlefile:
+            line = tlefile.readline()
+            while line != '':
+                if line[0].isdigit() is False:
+                    self.satnames.append(line.strip())
+                line = tlefile.readline()
+        self.satnames.sort()
+
+
+    def updatetle(self):
+        #Check if we have an updated TLE file for weather satellites, if not grab a fresh one.
+        #It should be in the same dir this file
+        if os.access("weather.txt", os.F_OK) is True:
+            #Check age
+            curtime = time()
+            filemodtime = int(os.stat("weather.txt").st_mtime)
+            if curtime - filemodtime > 24 * 60 * 60: # 24 hours
+                print("Updating weather.txt TLE file...")
+                urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", "weather.txt")
+        else:
+            print("Downloading weather.txt TLE file...")
+            urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", "weather.txt")
+
+def create_time_string(seconds_total):
+    days = int(seconds_total/(60*60*24))
+    hours = int(seconds_total%(60*60*24)/(60*60))
+    minutes = int(seconds_total%(60*60*24)%(60*60)/60)
+    seconds = int(seconds_total%(60*60*24)%(60*60)%60)
+    timestring = ""
+    if days > 0:
+        timestring += "%s days " % days
+    if hours > 0:
+        timestring += "%s hours " % hours
+    if minutes > 0:
+        timestring += "%s minutes " % minutes
+    if seconds > 0:
+        timestring += "%s seconds" % seconds
+    return timestring
 
 def main():
     print("Welcome to Satellite Antenna Control v%s!" % _VERSION_)
@@ -748,6 +892,9 @@ def main():
 
     azmc = AzMotorControl()
     elmc = ElMotorControl()
+
+
+
 
     try:
         #Start the terminal interface, which will also handle homing and starting the threads
