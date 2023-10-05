@@ -21,7 +21,7 @@ ANTENNA_GPS_ALT = 0 # in kilometers
 #Minimum elevation before we start and stop our tracking. 0 is perfectly at the horizon.
 #Most location have obstructions around the horizon so that part of the pass is wasted.
 #If you know what elevation you start getting a clear line-of-sight then enter that below.
-TRACKING_START_ELEVATION = 0
+TRACKING_START_ELEVATION = 5
 
 PWM_FREQUENCY = 2000
 
@@ -135,15 +135,15 @@ class RotaryEncoder:
         self.last_state = new_state
         if delta == 1:
             if self.direction == self.CLOCKWISE:
-                self.curangle -= self.ANGLE_TICK
-                self.curtick -= 1
+                self.curangle += self.ANGLE_TICK
+                self.curtick += 1
                 #print("Clockwise: %s" % self.curangle)
             else:
                 self.direction = self.CLOCKWISE
         elif delta == 3:
             if self.direction == self.ANTICLOCKWISE:
-                self.curangle += self.ANGLE_TICK
-                self.curtick += 1
+                self.curangle -= self.ANGLE_TICK
+                self.curtick -= 1
                 #print("Anticlockwise: %s" % self.curangle)
             else:
                 self.direction = self.ANTICLOCKWISE
@@ -205,15 +205,15 @@ class ElMotorControl(threading.Thread):
     def move_to_commanded_angle(self):
         # This function is constantly called as a background thread, constantly evaluating and commanding movements.
         #Determine which way to turn the motor
-        if self.commanded_angle > self.encoder.curangle:
+        if self.commanded_angle < self.encoder.curangle:
             movefun = self.move_motor_dir1
             endstop = self.blue_endstop
             #Needed sign information for old function but new function probably could get away with abs() instead. This works though so meh.
-            anglesign = 1
-        elif self.commanded_angle < self.encoder.curangle:
+            anglesign = -1
+        elif self.commanded_angle > self.encoder.curangle:
             movefun = self.move_motor_dir2
             endstop = self.yellow_endstop
-            anglesign = -1
+            anglesign = 1
         else: #Commanded angle and current angle are the same, don't do anything. Maybe just make sure motor is stopped...
             self.stop_motor()
             return
@@ -309,17 +309,17 @@ class ElMotorControl(threading.Thread):
     def move_to_angle(self, angle, speed=100):
         #This function simply runs the motor in the correct direction until the curangle of the encoder matches the supplied angle
         #Determine which way to turn the motor
-        if angle > self.encoder.curangle:
+        if angle < self.encoder.curangle:
             movefun = self.move_motor_dir1
             endstop = self.blue_endstop
             nicename = "blue"
             #Could save a few lines of code ignoring the sign information, but we need it to be sure we didnt go past the target.
-            anglesign = 1
+            anglesign = -1
         else:
             movefun = self.move_motor_dir2
             endstop = self.yellow_endstop
             nicename = "yellow"
-            anglesign = -1
+            anglesign = 1
 
 
         #For nicer output of current angle
@@ -361,45 +361,26 @@ class ElMotorControl(threading.Thread):
         print(" "*100, end="\r")
         print("Final angle: %s degrees [%s]" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick()))
 
-    #Quick homing will just move to the blue endstop and reset the encoder's internal angle variable to 0
-    def quickhome(self):
-        #Rough home at high speed towards the blue endstop
-        self.move_until_stop(direction=2)
-        #Not sure this helps accuracy much but I think for consistency its a good idea
-        #After finding home first time we back up a few degrees and find it again at a slower speed.
-        print("Found rough home, backing up for slow approach to find precise home.")
-        #Reset encoder class's current position to re-zero
-        self.encoder.reset_position()
-        self.move_motor_dir1() #Move backwards a second and find it again, slower.
-        sleep(1)
-        self.stop_motor()
-        print("\nFinding precise home position...")
-        self.move_until_stop(direction=2, speed=5)
-        print("\nFound final home position!")
-        self.stop_motor()
-        #Reset encoder position for the final time, should be an accurate and repeatable zero.
-        self.encoder.reset_position()
-
-
     #Calibrate home will find the blue endstop, then back up and slowly find the precise location of the blue endstop.
     #It will then set its angle var to 0 and move to the other endstop. When it finds the other endstop it again backs
     #up to slowly find the precise location of the yellow endstop. When it finds it, it takes the total number of ticks
     # and divides it by 2 to find the middle. If the endstops are symmetrical in their positions, that middle should be 90 degrees vertical.
     def calhome(self):
+        print("Finding elevation axis blue endstop...")
         self.homed = False
-        self.move_until_stop(direction=2)
-        self.move_motor_dir1()
-        sleep(1)
-        self.stop_motor()
-        self.move_until_stop(direction=2, speed=5)
-        print("Found precise location of yellow endstop. Now finding blue endstop...")
-        self.encoder.reset_position()
         self.move_until_stop(direction=1)
         self.move_motor_dir2()
         sleep(1)
         self.stop_motor()
         self.move_until_stop(direction=1, speed=5)
-        print("Found precise location of blue endstop at %s ticks from blue endstop. Now parking at 90-degrees (vertical)..." % self.encoder.curtick)
+        print("Found precise location of blue endstop. Now finding yellow endstop...")
+        self.encoder.reset_position()
+        self.move_until_stop(direction=2)
+        self.move_motor_dir1()
+        sleep(1)
+        self.stop_motor()
+        self.move_until_stop(direction=2, speed=5)
+        print("Found precise location of yellow endstop at %s ticks from blue endstop. Now parking at 90-degrees (vertical)..." % self.encoder.curtick)
         #Ok we know exactly where each endstop is. If they are symmetrically placed then theoretically the middle
         #position between the two should be straight vertical, 90 degrees. The problem is, thats nice 90 degrees from
         #our current position. We know the tick number we need to hit, but our function needs an angle. We can
@@ -501,15 +482,17 @@ class AzMotorControl(threading.Thread):
         GPIO.output(self.ain1, GPIO.LOW)
         GPIO.output(self.ain2, GPIO.LOW)
 
+    #Turn clockwise
     def move_motor_dir1(self, speed=100):
-        self.AZ_motor_PWM_out.ChangeDutyCycle(speed)
-        GPIO.output(self.ain1, GPIO.HIGH)
-        GPIO.output(self.ain2, GPIO.LOW)
-
-    def move_motor_dir2(self, speed=100):
         self.AZ_motor_PWM_out.ChangeDutyCycle(speed)
         GPIO.output(self.ain1, GPIO.LOW)
         GPIO.output(self.ain2, GPIO.HIGH)
+
+    #Turn counterclockwise
+    def move_motor_dir2(self, speed=100):
+        self.AZ_motor_PWM_out.ChangeDutyCycle(speed)
+        GPIO.output(self.ain1, GPIO.HIGH)
+        GPIO.output(self.ain2, GPIO.LOW)
 
     def move_until_stop(self, speed=100):
         self.move_motor_dir2(speed=speed)
@@ -611,7 +594,6 @@ def terminal_interface(azmc, elmc):
     elmc.start()
     while elmc.homed is False:
         sleep(0.1)
-
     print("Finished homing axes, starting user input loop...\n")
 
     command = ""
@@ -905,7 +887,7 @@ class SatFinder:
             #Check age
             curtime = time()
             filemodtime = int(os.stat("weather.txt").st_mtime)
-            if curtime - filemodtime > 24 * 60 * 60: # 24 hours
+            if curtime - filemodtime > 3 * 24 * 60 * 60: # 3 days
                 print("Updating weather.txt TLE file...")
                 urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", "weather.txt")
         else:
