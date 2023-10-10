@@ -465,9 +465,6 @@ class AzMotorControl(threading.Thread):
                 return
 
             anglediff = anglesign * (self.commanded_angle - self.encoder.curangle)
-            if anglediff < self.encoder.ANGLE_TICK:
-                self.stop_motor()
-                return # Can't reach exact commanded value because its between the smallest increment we can detect.
         else: # moving the opposite way and crossing the 0/359 line is shortest movement
             #Determine which way to go. If actualdistance is positive we move counterclockwise, negative we go clockwise
             if actualdistance > 0: # counterclockwise
@@ -478,6 +475,9 @@ class AzMotorControl(threading.Thread):
             # use the new numbers and determine to move the opposite way. And it slows down before target anyway so it should be fine.
             anglediff = 360 - abs(actualdistance)
 
+        if anglediff < self.encoder.ANGLE_TICK:
+            self.stop_motor()
+            return # Can't reach exact commanded value because its between the smallest increment we can detect.
 
         movespeed = self.speed # PWM duty cycle is between 0 and 100
         if anglediff > 5:
@@ -741,7 +741,29 @@ def terminal_interface(azmc, elmc):
 
         elif command == "w" or command == "watch":
             try:
+                #I might want a watch command that doesn't exit ever, but for now it would be nice if this ended when the movement was over
+                #I couldn't figure out a nice way to do this with both axes in a way that was aware of the azimuths possible opposite movement
+                #So I just track the differences in angle over the iterations and when it stops changing we stop watching
+                #Start with a number that is much different so we will get at least 1 iteration
+                azlast = azmc.encoder.curangle
+                azdiff = 1
+                ellast = elmc.encoder.curangle
+                eldiff = 1
+                count = 0 # I hate this code but it works lol.
                 while True:
+                    if azdiff == 0 and eldiff == 0:
+                        #Loop is too fast so sometimes there isnt a change between checks.
+                        #If we have no change for 5 iterations then we assume we're done.
+                        if count > 5:
+                            print("\n\nAt target position: AZ %s degrees [%s] -- EL %s degrees [%s]\n" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick))
+                            break
+                        else: count += 1
+                    else:
+                        count = 0
+                    azdiff = azlast - azmc.encoder.curangle
+                    azlast = azmc.encoder.curangle
+                    eldiff = ellast - elmc.encoder.curangle
+                    ellast = elmc.encoder.curangle
                     print(" "*100, end="\r") #Blanking line 100 chars long
                     print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
                     sleep(0.1)
