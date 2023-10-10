@@ -444,23 +444,40 @@ class AzMotorControl(threading.Thread):
         self.AZ_motor_PWM_out.stop()
 
     def move_to_commanded_angle(self):
+        #Keep the angles between 360
+        self.encoder.curangle %= 360
+        self.commanded_angle %= 360
+        #We don't actually use the ticks for tracking so we will keep that the same for now.
+        #Maybe we could even use that tick number to track the true position and unwind later.
         # This function is constantly called as a background thread, constantly evaluating and commanding movements.
-        #Determine which way to turn the motor
-        if self.commanded_angle > self.encoder.curangle:
-            movefun = self.move_motor_dir1
-            #Could save a few lines of code ignoring the sign information, but we need it to be sure we didnt go past the target.
-            anglesign = 1
-        elif self.commanded_angle < self.encoder.curangle:
-            movefun = self.move_motor_dir2
-            anglesign = -1
-        else: #Commanded angle and current angle are the same, don't do anything. Maybe just make sure motor is stopped...
-            self.stop_motor()
-            return
+        actualdistance = self.commanded_angle - self.encoder.curangle
+        if abs(actualdistance) < 180: # shorter movements are normal movements
+            #Determine which way to turn the motor
+            if self.commanded_angle > self.encoder.curangle:
+                movefun = self.move_motor_dir1
+                #Could save a few lines of code ignoring the sign information, but we need it to be sure we didnt go past the target.
+                anglesign = 1
+            elif self.commanded_angle < self.encoder.curangle:
+                movefun = self.move_motor_dir2
+                anglesign = -1
+            else: #Commanded angle and current angle are the same, don't do anything. Maybe just make sure motor is stopped...
+                self.stop_motor()
+                return
 
-        anglediff = anglesign * (self.commanded_angle - self.encoder.curangle)
-        if anglediff < self.encoder.ANGLE_TICK:
-            self.stop_motor()
-            return # Can't reach exact commanded value because its between the smallest increment we can detect.
+            anglediff = anglesign * (self.commanded_angle - self.encoder.curangle)
+            if anglediff < self.encoder.ANGLE_TICK:
+                self.stop_motor()
+                return # Can't reach exact commanded value because its between the smallest increment we can detect.
+        else: # moving the opposite way and crossing the 0/359 line is shortest movement
+            #Determine which way to go. If actualdistance is positive we move counterclockwise, negative we go clockwise
+            if actualdistance > 0: # counterclockwise
+                movefun = self.move_motor_dir2
+            else:
+                movefun = self.move_motor_dir1
+            # Positive or negative doesn't matter, we can't overrun the target anyway since the next loop iteration would
+            # use the new numbers and determine to move the opposite way. And it slows down before target anyway so it should be fine.
+            anglediff = 360 - abs(actualdistance)
+
 
         movespeed = self.speed # PWM duty cycle is between 0 and 100
         if anglediff > 5:
@@ -566,13 +583,14 @@ class AzMotorControl(threading.Thread):
     def find_home(self):
         self.homed = False
         #Rough home at high speed
-        self.move_until_stop()
+        self.move_until_stop() # Under the hood this always moves motor direction 2, so to go backwards we go dir1
         #Not sure this helps accuracy much but I think for consistency its a good idea
         #After finding home first time we back up a few degrees and find it again at a slower speed.
         print("Found rough home, backing up for slow approach to find precise home.")
-        #Reset encoder class's current position to re-zero
+        #Reset encoder class's current position to re-zero to give an indication as to how far we were off after we zero
         self.encoder.reset_position()
-        self.move_to_angle(8)
+        self.move_motor_dir1()
+        sleep(1)
         print("\nFinding precise home position...")
         self.move_until_stop(speed=5)
         print("\nFound final home position! Resetting counters. Be warned that endstops are not used to prevent over-travel on the azimuth axis.")
@@ -696,7 +714,7 @@ def terminal_interface(azmc, elmc):
 
             #Dont do anything if we dont have anything
             if elcommand is None and azcommand is None:
-                return
+                continue
 
             if command == "go":
                 movespeed = 100
