@@ -439,6 +439,9 @@ class AzMotorControl(threading.Thread):
     def quitthread(self):
         #If we were called externally then set the internal quitting flag true so the loop can stop
         self.quitting = True
+        #Its super important to properly unwind the mast before stopping until we hav absolute positioning data.
+        #Without a proper unwind we could destroy the entire wiring harness.
+        self.unwind_mast()
         #Stop the PWM channel or it causes problems when quitting python
         #Final app exit will handle the GPIO.cleanup()
         self.AZ_motor_PWM_out.stop()
@@ -493,6 +496,50 @@ class AzMotorControl(threading.Thread):
 
         #Ok now we know what motor to activate and how fast it should move.
         movefun(movespeed)
+
+    def unwind_mast(self):
+        print("Unwinding antenna mast back to home position...")
+
+        #Turn off the movement following function for now
+        self.stop_movement = True
+
+        #Instead of doing all the slowdown stuff here, we'll just shoot for a positive value and then
+        #do a move_to_angle() to finish it off.
+        target_angle = 5 # 5 is a safe spot, even if stop at full speed we wont overrun enough to matter.
+        target_tick = round(target_angle / AZ_ANGLE_TICK)
+
+        #determine direction.
+        #Positive ticks were clockwise movements, so we need to go counterclockwise to count back.
+        if self.encoder.curtick > target_tick:
+            movefun = self.move_motor_dir2
+            anglesign = 1
+        else: #elif self.encoder.curtick < target_tick:
+            movefun = self.move_motor_dir1
+            anglesign = -1
+
+        movefun()
+
+        tickdiff = anglesign * (self.encoder.curtick - target_tick)
+        #Get close enough, within 20 ticks should do it
+        while tickdiff > 0:
+            if self.encoder.curangle > 360: self.encoder.curangle %= 360
+            tickdiff = anglesign * (self.encoder.curtick - target_tick)
+            if GPIO.input(self.he_sensor) == 0:
+                addtext = " - HE SEN ACTIVE - TDIFF: %s" % tickdiff
+            else:
+                addtext = " - TDIFF: %s" % tickdiff
+            print(" "*100, end="\r") # Blank out the line before reprinting, otherwise old crap can be left behind
+            print("Current angle: %s degrees [%s] %s" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick(), addtext), end="\r")
+            sleep(0.01)
+
+        #Now move to home the proper way and we're done
+        print("\nUnwound mast, now parking at home position...")
+        self.stop_motor()
+        self.move_to_angle(0)
+        #Reset commanded angle to 0 and resume follower function
+        self.commanded_angle = 0
+        self.stop_movement = False
+
 
     def stop_motor(self):
         self.AZ_motor_PWM_out.ChangeDutyCycle(0)
@@ -637,6 +684,9 @@ def terminal_interface(azmc, elmc):
                 print("Current position of azimuth and elevation is: %s [%s]  -  %s [%s]" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick(), elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
             else:
                 print("Invalid argument, either 'az' or 'el' should be passed to the position command or nothing at all.")
+
+        elif command == "u":
+            azmc.unwind_mast()
 
         elif command == "h" or command == "home":
             if args == "az":
@@ -974,4 +1024,5 @@ def main():
 
 
 if __name__ == "__main__":
+   main()
    main()
