@@ -498,6 +498,9 @@ class AzMotorControl(threading.Thread):
         movefun(movespeed)
 
     def unwind_mast(self):
+        #Do nothing if we're already at zero
+        if self.encoder.curtick == 0:
+            return
         print("Unwinding antenna mast back to home position...")
 
         #Turn off the movement following function for now
@@ -665,254 +668,257 @@ def terminal_interface(azmc, elmc):
     args = ""
     inp = ""
     while inp.lower() != "quit" and inp.lower() != "q":
-        #Allow internal loop bypass
-        if inp == "BYPASS": #Bypassing user input and directly activating another command.
-            inp = ""
-        else:
-            inp = input("CMD: ").strip().lower()
-            inpsplit = re.split(" ", inp)
-            command = inpsplit[0]
-            args = " ".join(inpsplit[1:])
-
-        if command == "p" or command == "pos" or command == "position":
-            #Determine what axis we asked about
-            if args == "az":
-                print("Current mast position is: %s degrees [%s]\n" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick()))
-            elif args == "el":
-                print("Current antenna elevation is: %s degrees [%s]\n" % (elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
-            elif args == "":
-                print("Current position of azimuth and elevation is: %s [%s]  -  %s [%s]" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick(), elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
+        try:
+            #Allow internal loop bypass
+            if inp == "BYPASS": #Bypassing user input and directly activating another command.
+                inp = ""
             else:
-                print("Invalid argument, either 'az' or 'el' should be passed to the position command or nothing at all.")
+                inp = input("CMD: ").strip().lower()
+                inpsplit = re.split(" ", inp)
+                command = inpsplit[0]
+                args = " ".join(inpsplit[1:])
 
-        elif command == "u":
-            azmc.unwind_mast()
-
-        elif command == "h" or command == "home":
-            if args == "az":
-                print("Finding mast home position, current position is: %s degrees [%s]\n" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick()))
-                azmc.find_home()
-            elif args == "el":
-                print("Finding antenna elevation home position, current position is: %s degrees [%s]\n" % (elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
-                elmc.calhome()
-            else:
-                print("Invalid argument, either 'az' or 'el' should be passed to this command.")
-
-        #Pause movement, soft-stop
-        #Currently we just set the commanded angle to whatever the angle currently is
-        elif command == "pause":
-            if args == "az":
-                print("Pausing movement on the azimuth axis at %s degrees" % azmc.encoder.curangle)
-                azmc.commanded_angle = azmc.encoder.curangle
-            elif args == "el":
-                print("Pausing movement on the elevation axis at %s degrees" % elmc.encoder.curangle)
-                elmc.commanded_angle = elmc.encoder.curangle
-            elif args == "": #Pause both
-                print("Pausing azimuth and elevation axis at AZ%s EL%s" % (azmc.encoder.curangle, elmc.encoder.curangle))
-                azmc.commanded_angle = azmc.encoder.curangle
-                elmc.commanded_angle = elmc.encoder.curangle
-            else:
-                print("Invalid argument, either 'az' or 'el' should be passed to this command.")
-
-        #More of a hard-stop, just interrupt the command function loop
-        elif command == "estop":
-            print("Commanded both axes to stop movement now...")
-            azmc.stop_movement = True
-            elmc.stop_movement = True
-
-        #ONLY WAY TO RESUME FROM AN ESTOP BESIDES RESTARTING IS THIS COMMAND!
-        #NO OTHER COMMANDS WILL WORK AFTER AN ESTOP UNTIL YOU DO THIS
-        elif command == "estart":
-            print("Restarting movement for both axes...")
-            azmc.stop_movement = False
-            elmc.stop_movement = False
-
-        #Move command format:
-        #go az101.64 el95
-        #Can commit az or el and move just one axis
-        #should be tolerant of spaces between az and the numbers
-        #should be tolerant of both ints and floats, possibly mixed
-        #should be tolerant of leading zeros.
-        #should be tolerant of transposing commands (el before az)
-        elif command == "go" or command == "sgo":
-            azangle = None
-            elangle = None
-            azcommand = re.search("az ?([0-9]{1,3}(?:\.[0-9]{1,3})?)", args)
-            if azcommand is not None:
-                azangle = float(azcommand.group(1))
-                if abs(azangle) < MAX_AZ_INPUT_ANGLE:
-                    aztick = round(azangle / azmc.encoder.ANGLE_TICK)
-                    aztext = "azimuth axis to %s degrees [%s]" % (azangle, aztick)
+            if command == "p" or command == "pos" or command == "position":
+                #Determine what axis we asked about
+                if args == "az":
+                    print("Current mast position is: %s degrees [%s]\n" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick()))
+                elif args == "el":
+                    print("Current antenna elevation is: %s degrees [%s]\n" % (elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
+                elif args == "":
+                    print("Current position of azimuth and elevation is: %s [%s]  -  %s [%s]" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick(), elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
                 else:
-                    print("Invalid azimuth angle of %s degrees (Current limit is %s), not commanding any movements" % (azangle, MAX_AZ_INPUT_ANGLE))
-                    continue
-            else:
-                aztext = ""
-            elcommand = re.search("el ?([0-9]{1,3}(?:\.[0-9]{1,3})?)", args)
-            if elcommand is not None:
-                elangle = float(elcommand.group(1))
-                if abs(elangle) < MAX_EL_INPUT_ANGLE:
-                    eltick = round(elangle / elmc.encoder.ANGLE_TICK)
-                    eltext = "elevation axis to %s degrees [%s]" % (elangle, eltick)
+                    print("Invalid argument, either 'az' or 'el' should be passed to the position command or nothing at all.")
+
+            elif command == "u":
+                azmc.unwind_mast()
+
+            elif command == "h" or command == "home":
+                if args == "az":
+                    print("Finding mast home position, current position is: %s degrees [%s]\n" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick()))
+                    azmc.find_home()
+                elif args == "el":
+                    print("Finding antenna elevation home position, current position is: %s degrees [%s]\n" % (elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
+                    elmc.calhome()
                 else:
-                    print("Invalid elevation angle of %s degrees (Current limit is %s), not commanding any movements" % (elangle, MAX_EL_INPUT_ANGLE))
-                    continue
-                if len(aztext) > 0:
-                    eltext = " and " + eltext
-            else:
-                eltext = ""
+                    print("Invalid argument, either 'az' or 'el' should be passed to this command.")
 
-            #Dont do anything if we dont have anything
-            if elcommand is None and azcommand is None:
-                continue
+            #Pause movement, soft-stop
+            #Currently we just set the commanded angle to whatever the angle currently is
+            elif command == "pause":
+                if args == "az":
+                    print("Pausing movement on the azimuth axis at %s degrees" % azmc.encoder.curangle)
+                    azmc.commanded_angle = azmc.encoder.curangle
+                elif args == "el":
+                    print("Pausing movement on the elevation axis at %s degrees" % elmc.encoder.curangle)
+                    elmc.commanded_angle = elmc.encoder.curangle
+                elif args == "": #Pause both
+                    print("Pausing azimuth and elevation axis at AZ%s EL%s" % (azmc.encoder.curangle, elmc.encoder.curangle))
+                    azmc.commanded_angle = azmc.encoder.curangle
+                    elmc.commanded_angle = elmc.encoder.curangle
+                else:
+                    print("Invalid argument, either 'az' or 'el' should be passed to this command.")
 
-            if command == "go":
-                movespeed = 100
-                cmdtext = "Moving the "
-            else: #slow go command
-                movespeed = 25
-                cmdtext = "Slowly moving the "
+            #More of a hard-stop, just interrupt the command function loop
+            elif command == "estop":
+                print("Commanded both axes to stop movement now...")
+                azmc.stop_movement = True
+                elmc.stop_movement = True
 
-            curpostext = " (current pos: AZ%s - EL%s)" % (azmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentAngle())
-            outputtext = cmdtext + aztext + eltext + curpostext
-            print(outputtext)
-            #Our new movement system is closed loop without any feedback. We now have a separate command to watch
-            #the movement progress called 'watch'.
-            #After setting the movement position we will directly go to watch mode.
-            if azangle is not None:
-                azmc.speed = movespeed
-                azmc.commanded_angle = azangle
-            if elangle is not None:
-                elmc.speed = movespeed
-                elmc.commanded_angle = elangle
-            #Go straight to watch mode
-            inp = "BYPASS"
-            command = "watch"
+            #ONLY WAY TO RESUME FROM AN ESTOP BESIDES RESTARTING IS THIS COMMAND!
+            #NO OTHER COMMANDS WILL WORK AFTER AN ESTOP UNTIL YOU DO THIS
+            elif command == "estart":
+                print("Restarting movement for both axes...")
+                azmc.stop_movement = False
+                elmc.stop_movement = False
 
-        elif command == "w" or command == "watch":
-            try:
-                #I might want a watch command that doesn't exit ever, but for now it would be nice if this ended when the movement was over
-                #I couldn't figure out a nice way to do this with both axes in a way that was aware of the azimuths possible opposite movement
-                #So I just track the differences in angle over the iterations and when it stops changing we stop watching
-                #Start with a number that is much different so we will get at least 1 iteration
-                azlast = azmc.encoder.curangle
-                azdiff = 1
-                ellast = elmc.encoder.curangle
-                eldiff = 1
-                count = 0 # I hate this code but it works lol.
-                while True:
-                    if azdiff == 0 and eldiff == 0:
-                        #Loop is too fast so sometimes there isnt a change between checks.
-                        #If we have no change for 5 iterations then we assume we're done.
-                        if count > 5:
-                            print("\n\nAt target position: AZ %s degrees [%s] -- EL %s degrees [%s]\n" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick))
-                            break
-                        else: count += 1
+            #Move command format:
+            #go az101.64 el95
+            #Can commit az or el and move just one axis
+            #should be tolerant of spaces between az and the numbers
+            #should be tolerant of both ints and floats, possibly mixed
+            #should be tolerant of leading zeros.
+            #should be tolerant of transposing commands (el before az)
+            elif command == "go" or command == "sgo":
+                azangle = None
+                elangle = None
+                azcommand = re.search("az ?([0-9]{1,3}(?:\.[0-9]{1,3})?)", args)
+                if azcommand is not None:
+                    azangle = float(azcommand.group(1))
+                    if abs(azangle) < MAX_AZ_INPUT_ANGLE:
+                        aztick = round(azangle / azmc.encoder.ANGLE_TICK)
+                        aztext = "azimuth axis to %s degrees [%s]" % (azangle, aztick)
                     else:
-                        count = 0
-                    azdiff = azlast - azmc.encoder.curangle
-                    azlast = azmc.encoder.curangle
-                    eldiff = ellast - elmc.encoder.curangle
-                    ellast = elmc.encoder.curangle
-                    print(" "*100, end="\r") #Blanking line 100 chars long
-                    print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
-                    sleep(0.1)
-            except KeyboardInterrupt:
-                print("\n")
-                continue
+                        print("Invalid azimuth angle of %s degrees (Current limit is %s), not commanding any movements" % (azangle, MAX_AZ_INPUT_ANGLE))
+                        continue
+                else:
+                    aztext = ""
+                elcommand = re.search("el ?([0-9]{1,3}(?:\.[0-9]{1,3})?)", args)
+                if elcommand is not None:
+                    elangle = float(elcommand.group(1))
+                    if abs(elangle) < MAX_EL_INPUT_ANGLE:
+                        eltick = round(elangle / elmc.encoder.ANGLE_TICK)
+                        eltext = "elevation axis to %s degrees [%s]" % (elangle, eltick)
+                    else:
+                        print("Invalid elevation angle of %s degrees (Current limit is %s), not commanding any movements" % (elangle, MAX_EL_INPUT_ANGLE))
+                        continue
+                    if len(aztext) > 0:
+                        eltext = " and " + eltext
+                else:
+                    eltext = ""
 
-        elif command == "v" or command == "version":
-            print("Antenna Control version %s" % _VERSION_)
+                #Dont do anything if we dont have anything
+                if elcommand is None and azcommand is None:
+                    continue
 
-        elif command == "satlist":
-            satfind.satlist()
+                if command == "go":
+                    movespeed = 100
+                    cmdtext = "Moving the "
+                else: #slow go command
+                    movespeed = 25
+                    cmdtext = "Slowly moving the "
 
-        elif command == "passlist": # Generate a 24 hour passlist for a specific satellite
-            if len(args) == 0:
-                print("You must include a satellite name to list passes for!")
-                continue
-            passes = satfind.passlist(args)
-            if passes is not None:
-                satparams = satfind.getsatparams(args)
-                satfind.printpasses(satparams, passes)
-
-        #Starting to feel like this should be separated. So much code here and theres more coming.
-        elif command == "track":
-            satname = args #so the code looks nicer
-            if len(satname) == 0:
-                print("You must include a satellite name to track!")
-                continue
-            satparams = satfind.getsatparams(satname)
-            passes = satfind.passlist(satname)
-            if passes is None:
-                continue
-            satfind.printpasses(satparams, passes)
-            print("%s) Cancel Track" % len(passes))
-            selectedpass = input("Select a pass number to track: ")
-            if selectedpass.isdigit() is False:
-                print("Selection must be a digit")
-                continue
-            if int(selectedpass) > len(passes)-1:
-                print("Canceling track selection.")
-                continue
-            passdata = passes[int(selectedpass)]
-            starttimelocaltz = passdata[0].astimezone()
-            nicestarttime = starttimelocaltz.strftime("%Y-%m-%d %H:%M:%S")
-            starttime = starttimelocaltz - datetime.now().astimezone()
-            startimetext = create_time_string(starttime.total_seconds())
-            max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
-            eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
-            print("Selected pass #%s, %s%s MEL, starting in %s." % (selectedpass, round(max_location[1]), eastwest, startimetext))
-            #Find the start location for this pass
-            (startaz, startel) = satparams.get_observer_look(passdata[0], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
-            startmove = input("Starting position for this pass is at Az%s El%s. Move to start position and wait to track (Y/N)? " % (round(startaz, 3), round(startel, 3))).lower()
-            if startmove == "n":
-                print("Canceling tracking...")
-                continue
-            elif startmove == "y":
-                print("Moving to starting position...")
-                azmc.commanded_angle = startaz
-                elmc.commanded_angle = startel
-                #Track movement until we're about 1 degree away then go into wait mode
-                while abs(azmc.commanded_angle - azmc.encoder.curangle) > 1 or abs(elmc.commanded_angle - elmc.encoder.curangle) > 1:
-                    print(" "*100, end="\r") #Blanking line 100 chars long
-                    print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
-                    sleep(0.1)
-                print("")
-                print("Parked at starting position, now waiting for the pass to start. Start time is %s (%s)." % (nicestarttime, startimetext))
-                seconds_until_start = 2
-                while seconds_until_start > 1:
-                    seconds_until_start = (starttimelocaltz - datetime.now().astimezone()).total_seconds()
-                    timetostarttext = create_time_string(seconds_until_start)
-                    print(" "*100, end="\r")
-                    print("Waiting for %s, starting at %s (%s)..." % (satname, nicestarttime, timetostarttext), end="\r")
-                    sleep(1)
-                print("")
-                print("Starting track on %s!" % satname)
-                stoptimelocaltz = passdata[1].astimezone()
-                seconds_until_stop = 2
-                while seconds_until_stop > 1:
-                    seconds_until_stop = (stoptimelocaltz - datetime.now().astimezone()).total_seconds()
-                    #Figure out sat position right now
-                    (sataz, satel) = satparams.get_observer_look(datetime.now(pytz.utc), ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
-                    #Command movements, then update screen
-                    azmc.commanded_angle = sataz
-                    elmc.commanded_angle = satel
-                    timeleftstr = create_time_string(seconds_until_stop)
-                    print(" "*200, end="\r")
-                    print("Tracking %s at Az%s El%s - %s - Current antenna position: Az%s El%s" % (satname, round(sataz, 3), round(satel, 3), timeleftstr, round(azmc.encoder.curangle, 3), round(elmc.encoder.curangle, 3)), end="\r")
-                    sleep(0.05) #Update 50 times a second. Might need more.
-                print("")
-                print("Finished tracking %s! Parking antenna at home position..." % satname)
-                azmc.commanded_angle = AZ_PARK_ANGLE
-                elmc.commanded_angle = EL_PARK_ANGLE
+                curpostext = " (current pos: AZ%s - EL%s)" % (azmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentAngle())
+                outputtext = cmdtext + aztext + eltext + curpostext
+                print(outputtext)
+                #Our new movement system is closed loop without any feedback. We now have a separate command to watch
+                #the movement progress called 'watch'.
+                #After setting the movement position we will directly go to watch mode.
+                if azangle is not None:
+                    azmc.speed = movespeed
+                    azmc.commanded_angle = azangle
+                if elangle is not None:
+                    elmc.speed = movespeed
+                    elmc.commanded_angle = elangle
+                #Go straight to watch mode
                 inp = "BYPASS"
                 command = "watch"
 
+            elif command == "w" or command == "watch":
+                try:
+                    #I might want a watch command that doesn't exit ever, but for now it would be nice if this ended when the movement was over
+                    #I couldn't figure out a nice way to do this with both axes in a way that was aware of the azimuths possible opposite movement
+                    #So I just track the differences in angle over the iterations and when it stops changing we stop watching
+                    #Start with a number that is much different so we will get at least 1 iteration
+                    azlast = azmc.encoder.curangle
+                    azdiff = 1
+                    ellast = elmc.encoder.curangle
+                    eldiff = 1
+                    count = 0 # I hate this code but it works lol.
+                    while True:
+                        if azdiff == 0 and eldiff == 0:
+                            #Loop is too fast so sometimes there isnt a change between checks.
+                            #If we have no change for 5 iterations then we assume we're done.
+                            if count > 5:
+                                print("\n\nAt target position: AZ %s degrees [%s] -- EL %s degrees [%s]\n" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick))
+                                break
+                            else: count += 1
+                        else:
+                            count = 0
+                        azdiff = azlast - azmc.encoder.curangle
+                        azlast = azmc.encoder.curangle
+                        eldiff = ellast - elmc.encoder.curangle
+                        ellast = elmc.encoder.curangle
+                        print(" "*100, end="\r") #Blanking line 100 chars long
+                        print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
+                        sleep(0.1)
+                except KeyboardInterrupt:
+                    print("\n")
+                    continue
 
-        #End of while loop
-        sleep(0.5)
+            elif command == "v" or command == "version":
+                print("Antenna Control version %s" % _VERSION_)
 
+            elif command == "satlist":
+                satfind.satlist()
+
+            elif command == "passlist": # Generate a 24 hour passlist for a specific satellite
+                if len(args) == 0:
+                    print("You must include a satellite name to list passes for!")
+                    continue
+                passes = satfind.passlist(args)
+                if passes is not None:
+                    satparams = satfind.getsatparams(args)
+                    satfind.printpasses(satparams, passes)
+
+            #Starting to feel like this should be separated. So much code here and theres more coming.
+            elif command == "track":
+                satname = args #so the code looks nicer
+                if len(satname) == 0:
+                    print("You must include a satellite name to track!")
+                    continue
+                satparams = satfind.getsatparams(satname)
+                passes = satfind.passlist(satname)
+                if passes is None:
+                    continue
+                satfind.printpasses(satparams, passes)
+                print("%s) Cancel Track" % len(passes))
+                selectedpass = input("Select a pass number to track: ")
+                if selectedpass.isdigit() is False:
+                    print("Selection must be a digit")
+                    continue
+                if int(selectedpass) > len(passes)-1:
+                    print("Canceling track selection.")
+                    continue
+                passdata = passes[int(selectedpass)]
+                starttimelocaltz = passdata[0].astimezone()
+                nicestarttime = starttimelocaltz.strftime("%Y-%m-%d %H:%M:%S")
+                starttime = starttimelocaltz - datetime.now().astimezone()
+                startimetext = create_time_string(starttime.total_seconds())
+                max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+                eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
+                print("Selected pass #%s, %s%s MEL, starting in %s." % (selectedpass, round(max_location[1]), eastwest, startimetext))
+                #Find the start location for this pass
+                (startaz, startel) = satparams.get_observer_look(passdata[0], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+                startmove = input("Starting position for this pass is at Az%s El%s. Move to start position and wait to track (Y/N)? " % (round(startaz, 3), round(startel, 3))).lower()
+                if startmove == "n":
+                    print("Canceling tracking...")
+                    continue
+                elif startmove == "y":
+                    print("Moving to starting position...")
+                    azmc.commanded_angle = startaz
+                    elmc.commanded_angle = startel
+                    #Track movement until we're about 1 degree away then go into wait mode
+                    while abs(azmc.commanded_angle - azmc.encoder.curangle) > 1 or abs(elmc.commanded_angle - elmc.encoder.curangle) > 1:
+                        print(" "*100, end="\r") #Blanking line 100 chars long
+                        print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
+                        sleep(0.1)
+                    print("")
+                    print("Parked at starting position, now waiting for the pass to start. Start time is %s (%s)." % (nicestarttime, startimetext))
+                    seconds_until_start = 2
+                    while seconds_until_start > 1:
+                        seconds_until_start = (starttimelocaltz - datetime.now().astimezone()).total_seconds()
+                        timetostarttext = create_time_string(seconds_until_start)
+                        print(" "*100, end="\r")
+                        print("Waiting for %s, starting at %s (%s)..." % (satname, nicestarttime, timetostarttext), end="\r")
+                        sleep(1)
+                    print("")
+                    print("Starting track on %s!" % satname)
+                    stoptimelocaltz = passdata[1].astimezone()
+                    seconds_until_stop = 2
+                    while seconds_until_stop > 1:
+                        seconds_until_stop = (stoptimelocaltz - datetime.now().astimezone()).total_seconds()
+                        #Figure out sat position right now
+                        (sataz, satel) = satparams.get_observer_look(datetime.now(pytz.utc), ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+                        #Command movements, then update screen
+                        azmc.commanded_angle = sataz
+                        elmc.commanded_angle = satel
+                        timeleftstr = create_time_string(seconds_until_stop)
+                        print(" "*200, end="\r")
+                        print("Tracking %s at Az%s El%s - %s - Current antenna position: Az%s El%s" % (satname, round(sataz, 3), round(satel, 3), timeleftstr, round(azmc.encoder.curangle, 3), round(elmc.encoder.curangle, 3)), end="\r")
+                        sleep(0.05) #Update 50 times a second. Might need more.
+                    print("")
+                    print("Finished tracking %s! Parking antenna at home position..." % satname)
+                    azmc.commanded_angle = AZ_PARK_ANGLE
+                    elmc.commanded_angle = EL_PARK_ANGLE
+                    inp = "BYPASS"
+                    command = "watch"
+
+
+            #End of while loop
+            sleep(0.5)
+        except KeyboardInterrupt:
+            print("\n")
+            continue
 
 class SatFinder:
     def __init__(self):
@@ -935,7 +941,9 @@ class SatFinder:
             startimetext = create_time_string(starttime.total_seconds())
             max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
             eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
-            print("%s) %s - %s%s degree MEL pass (Az %s) in %s - duration %s" % (i, nicestarttime, round(max_location[1]), eastwest, round(max_location[0]), startimetext, durationtext))
+            longitude = round(satparams.get_lonlatalt(passdata[2])[0]) #Longitude at max elevation
+            longtext = "%s%s" % (abs(longitude), "E" if longitude > 0 else "W")
+            print("%s) %s - %s%s degree MEL pass (Long %s) in %s - duration %s" % (i, nicestarttime, round(max_location[1]), eastwest, longtext, startimetext, durationtext))
 
     def passlist(self, satname):
         satparams = self.getsatparams(satname)
@@ -943,8 +951,8 @@ class SatFinder:
             return None
         passlist = satparams.get_next_passes(datetime.now(pytz.utc), 24, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT, horizon=TRACKING_START_ELEVATION) #Next 24 hours
         if len(passlist) > 0:
-            print("Found %s passes in the next 24 hours for '%s'." % (len(passlist), satname))
         else:
+            print("Found %s passes in the next 24 hours for '%s'." % (len(passlist), satname))
             print("No passes for %s in the next 24 hours using current TLE data." % satname)
             return None
         return passlist
@@ -953,8 +961,11 @@ class SatFinder:
         #Check if the satellite exists
         try:
             satparams = orbital.Orbital(satname, tle_file="weather.txt")
-        except:
+        except KeyError:
             print("Couldn't find satellite '%s' in TLE file. Use the 'satlist' command to see a list of available satellites." % satname)
+            return None
+        except NotImplementedError:
+            print("Pyorbital doesn't yet support calculations for geostationary satellites. There are alternative libraries that I have yet to try that may support them.")
             return None
         return satparams
 
