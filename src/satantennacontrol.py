@@ -1,13 +1,13 @@
-_VERSION_ = 0.2
+_VERSION_ = 0.3
 
 import RPi.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
 from time import sleep, time
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.request import urlretrieve
 from pyorbital import orbital
 import threading, re, os, os.path, pytz
-
+from difflib import SequenceMatcher
 
 #NEEDED FOR SATELLITE TRACKING!
 
@@ -86,6 +86,10 @@ EL_ANGLE_TICK = 0.18
 #Where do we park the elevation and azimuth axes after calibrating?
 EL_PARK_ANGLE = 90 # Straight up and down
 AZ_PARK_ANGLE = 0 # Park azimuth at 0 (which should be due north)
+
+
+#Trying to find a ratio so I don't need to remember the exact way to specify meteor-m2 3
+SATNAME_MATCH_RATIO = 0.89
 
 class RotaryEncoder:
     CLOCKWISE=1
@@ -842,77 +846,83 @@ def terminal_interface(azmc, elmc):
 
             #Starting to feel like this should be separated. So much code here and theres more coming.
             elif command == "track":
-                satname = args #so the code looks nicer
-                if len(satname) == 0:
-                    print("You must include a satellite name to track!")
+                try: #Covering this one specifically in try/except so we can always unwind if anything goes wrong
+                    satname = args #so the code looks nicer
+                    if len(satname) == 0:
+                        print("You must include a satellite name to track!")
+                        continue
+                    satparams = satfind.getsatparams(satname)
+                    passes = satfind.passlist(satname)
+                    if passes is None:
+                        continue
+                    satfind.printpasses(satparams, passes)
+                    print("%s) Cancel Track" % len(passes))
+                    selectedpass = input("Select a pass number to track: ")
+                    if selectedpass.isdigit() is False:
+                        print("Selection must be a digit")
+                        continue
+                    if int(selectedpass) > len(passes)-1:
+                        print("Canceling track selection.")
+                        continue
+                    passdata = passes[int(selectedpass)]
+                    starttimelocaltz = passdata[0].astimezone()
+                    nicestarttime = starttimelocaltz.strftime("%Y-%m-%d %H:%M:%S")
+                    starttime = starttimelocaltz - datetime.now().astimezone()
+                    startimetext = create_time_string(starttime.total_seconds())
+                    max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+                    eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
+                    print("Selected pass #%s, %s%s MEL, starting in %s." % (selectedpass, round(max_location[1]), eastwest, startimetext))
+                    #Find the start location for this pass
+                    (startaz, startel) = satparams.get_observer_look(passdata[0], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+                    startmove = input("Starting position for this pass is at Az%s El%s. Move to start position and wait to track (Y/N)? " % (round(startaz, 3), round(startel, 3))).lower()
+                    if startmove == "n":
+                        print("Canceling tracking...")
+                        continue
+                    elif startmove == "y":
+                        print("Moving to starting position...")
+                        azmc.commanded_angle = startaz
+                        elmc.commanded_angle = startel
+                        #Track movement until we're about 1 degree away then go into wait mode
+                        while abs(azmc.commanded_angle - azmc.encoder.curangle) > 1 or abs(elmc.commanded_angle - elmc.encoder.curangle) > 1:
+                            print(" "*100, end="\r") #Blanking line 100 chars long
+                            print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
+                            sleep(0.1)
+                        print("")
+                        print("Parked at starting position, now waiting for the pass to start. Start time is %s (%s)." % (nicestarttime, startimetext))
+                        seconds_until_start = 2
+                        while seconds_until_start > 1:
+                            seconds_until_start = (starttimelocaltz - datetime.now().astimezone()).total_seconds()
+                            timetostarttext = create_time_string(seconds_until_start)
+                            print(" "*100, end="\r")
+                            print("Waiting for %s, starting at %s (%s)..." % (satname, nicestarttime, timetostarttext), end="\r")
+                            sleep(1)
+                        print("")
+                        print("Starting track on %s!" % satname)
+                        stoptimelocaltz = passdata[1].astimezone()
+                        seconds_until_stop = 2
+                        while seconds_until_stop > 1:
+                            seconds_until_stop = (stoptimelocaltz - datetime.now().astimezone()).total_seconds()
+                            #Figure out sat position right now
+                            (sataz, satel) = satparams.get_observer_look(datetime.now(pytz.utc), ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+                            #Command movements, then update screen
+                            azmc.commanded_angle = sataz
+                            elmc.commanded_angle = satel
+                            timeleftstr = create_time_string(seconds_until_stop)
+                            #Clearing more than the current width of the screen causes a \n to be printed
+                            #But we dont want to underclear either. Just take the length of the current message and add 10.
+                            #It probably hasnt changed THAT much from one second ago.
+                            printmsg = "Tracking %s at Az%s El%s - %s - Current antenna position: Az%s El%s" % (satname, round(sataz, 3), round(satel, 3), timeleftstr, round(azmc.encoder.curangle, 3), round(elmc.encoder.curangle, 3))
+                            print(" "*(len(printmsg)+10), end="\r")
+                            print(printmsg, end="\r")
+                            sleep(0.05) #Update 50 times a second. Might need more.
+                        print("")
+                        print("Finished tracking %s! Parking antenna at home position..." % satname)
+                        #azmc.unwind_mast() call is how we park home again in the try/except's finally statement below
+                except KeyboardInterrupt:
+                    print("Canceling track command. Unwinding mast to home position.")
                     continue
-                satparams = satfind.getsatparams(satname)
-                passes = satfind.passlist(satname)
-                if passes is None:
-                    continue
-                satfind.printpasses(satparams, passes)
-                print("%s) Cancel Track" % len(passes))
-                selectedpass = input("Select a pass number to track: ")
-                if selectedpass.isdigit() is False:
-                    print("Selection must be a digit")
-                    continue
-                if int(selectedpass) > len(passes)-1:
-                    print("Canceling track selection.")
-                    continue
-                passdata = passes[int(selectedpass)]
-                starttimelocaltz = passdata[0].astimezone()
-                nicestarttime = starttimelocaltz.strftime("%Y-%m-%d %H:%M:%S")
-                starttime = starttimelocaltz - datetime.now().astimezone()
-                startimetext = create_time_string(starttime.total_seconds())
-                max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
-                eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
-                print("Selected pass #%s, %s%s MEL, starting in %s." % (selectedpass, round(max_location[1]), eastwest, startimetext))
-                #Find the start location for this pass
-                (startaz, startel) = satparams.get_observer_look(passdata[0], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
-                startmove = input("Starting position for this pass is at Az%s El%s. Move to start position and wait to track (Y/N)? " % (round(startaz, 3), round(startel, 3))).lower()
-                if startmove == "n":
-                    print("Canceling tracking...")
-                    continue
-                elif startmove == "y":
-                    print("Moving to starting position...")
-                    azmc.commanded_angle = startaz
-                    elmc.commanded_angle = startel
-                    #Track movement until we're about 1 degree away then go into wait mode
-                    while abs(azmc.commanded_angle - azmc.encoder.curangle) > 1 or abs(elmc.commanded_angle - elmc.encoder.curangle) > 1:
-                        print(" "*100, end="\r") #Blanking line 100 chars long
-                        print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
-                        sleep(0.1)
-                    print("")
-                    print("Parked at starting position, now waiting for the pass to start. Start time is %s (%s)." % (nicestarttime, startimetext))
-                    seconds_until_start = 2
-                    while seconds_until_start > 1:
-                        seconds_until_start = (starttimelocaltz - datetime.now().astimezone()).total_seconds()
-                        timetostarttext = create_time_string(seconds_until_start)
-                        print(" "*100, end="\r")
-                        print("Waiting for %s, starting at %s (%s)..." % (satname, nicestarttime, timetostarttext), end="\r")
-                        sleep(1)
-                    print("")
-                    print("Starting track on %s!" % satname)
-                    stoptimelocaltz = passdata[1].astimezone()
-                    seconds_until_stop = 2
-                    while seconds_until_stop > 1:
-                        seconds_until_stop = (stoptimelocaltz - datetime.now().astimezone()).total_seconds()
-                        #Figure out sat position right now
-                        (sataz, satel) = satparams.get_observer_look(datetime.now(pytz.utc), ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
-                        #Command movements, then update screen
-                        azmc.commanded_angle = sataz
-                        elmc.commanded_angle = satel
-                        timeleftstr = create_time_string(seconds_until_stop)
-                        print(" "*200, end="\r")
-                        print("Tracking %s at Az%s El%s - %s - Current antenna position: Az%s El%s" % (satname, round(sataz, 3), round(satel, 3), timeleftstr, round(azmc.encoder.curangle, 3), round(elmc.encoder.curangle, 3)), end="\r")
-                        sleep(0.05) #Update 50 times a second. Might need more.
-                    print("")
-                    print("Finished tracking %s! Parking antenna at home position..." % satname)
-                    azmc.commanded_angle = AZ_PARK_ANGLE
-                    elmc.commanded_angle = EL_PARK_ANGLE
-                    inp = "BYPASS"
-                    command = "watch"
-
+                finally:
+                    azmc.unwind_mast()
 
             #End of while loop
             sleep(0.5)
@@ -934,6 +944,9 @@ class SatFinder:
     def printpasses(self, satparams, passlist):
         #Go over the list and pull out some details, then print each one
         for i, passdata in enumerate(passlist):
+            #passdata[0] = AOS time
+            #passdata[1] = LOS time
+            #passdata[2] = max elevation time
             localtz = passdata[0].astimezone()
             nicestarttime = localtz.strftime("%Y-%m-%d %H:%M:%S")
             starttime = localtz - datetime.now().astimezone()
@@ -943,7 +956,21 @@ class SatFinder:
             eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
             longitude = round(satparams.get_lonlatalt(passdata[2])[0]) #Longitude at max elevation
             longtext = "%s%s" % (abs(longitude), "E" if longitude > 0 else "W")
-            print("%s) %s - %s%s degree MEL pass (Long %s) in %s - duration %s" % (i, nicestarttime, round(max_location[1]), eastwest, longtext, startimetext, durationtext))
+            #Find the direction. Only way I could think of is to look at the change in azimuth angle and if its going down or up
+            #One minute ahead in time should be enough to tell for sure what direction we are going, using max elevation as reference
+            p2time = passdata[2] + timedelta(minutes=1)
+            p2location = satparams.get_observer_look(p2time, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+            #More complicated than I thought, I also have to know what side of the circle I'm on
+            ns = ["North", "South"]
+            if max_location[0] > p2location[0]: #Compare their azimuths
+                di = 1
+            else:
+                di = 0
+            #And if we're on the other side of the circle its the opposite
+            if max_location[0] < 180:
+                di ^= 1
+            direction = ns[di]
+            print("%s) %s - %s%s degree MEL pass (%s Long) heading %s in %s - duration %s" % (i, nicestarttime, round(max_location[1]), eastwest, longtext, direction, startimetext, durationtext))
 
     def passlist(self, satname):
         satparams = self.getsatparams(satname)
@@ -962,13 +989,29 @@ class SatFinder:
         try:
             satparams = orbital.Orbital(satname, tle_file="weather.txt")
         except KeyError:
-            print("Couldn't find satellite '%s' in TLE file. Use the 'satlist' command to see a list of available satellites." % satname)
-            return None
+            closenamecheck = self.findclosestsatname(satname)
+            if isinstance(closenamecheck, list):
+                print("Couldn't find satellite '%s' in TLE file, did you mean '%s'? Use the 'satlist' command to see a list of available satellites." % (satname, closenamecheck[1]))
+                return None
+            else:
+                print("Returning results for '%s' as '%s' wasn't found in the satellite list." % (closenamecheck, satname))
+                satparams = orbital.Orbital(closenamecheck, tle_file="weather.txt")
         except NotImplementedError:
             print("Pyorbital doesn't yet support calculations for geostationary satellites. There are alternative libraries that I have yet to try that may support them.")
             return None
         return satparams
 
+    def findclosestsatname(self, nxsatname):
+        #Use the sequence matcher against the satnames list and return if the match is 95% or greater (needs tuning).
+        highestmatch = [None, 0]
+        for s in self.satnames:
+            possiblematch = SequenceMatcher(None, nxsatname.lower(), s.lower()).ratio()
+            #keep track of the best match so far
+            if possiblematch > highestmatch[1]: highestmatch = [s, possiblematch]
+            if possiblematch > SATNAME_MATCH_RATIO:
+                return s
+        #If we didn't get a good solid match then just return the closest thing along with None so we know its not a good match
+        return [None, highestmatch[0]]
 
     def updatesatnames(self):
         self.satnames = []
