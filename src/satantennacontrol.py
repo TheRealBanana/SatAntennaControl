@@ -951,8 +951,8 @@ class SatFinder:
             return None
         passlist = satparams.get_next_passes(datetime.now(pytz.utc), 24, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT, horizon=TRACKING_START_ELEVATION) #Next 24 hours
         if len(passlist) > 0:
-        else:
             print("Found %s passes in the next 24 hours for '%s'." % (len(passlist), satname))
+        else:
             print("No passes for %s in the next 24 hours using current TLE data." % satname)
             return None
         return passlist
