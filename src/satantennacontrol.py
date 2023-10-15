@@ -924,8 +924,8 @@ def terminal_interface(azmc, elmc):
                 finally:
                     azmc.unwind_mast()
                     #AAAAnd now park
-                    azmc.commanded_angle = 0.0
-                    elmc.commanded_angle = 90
+                    azmc.commanded_angle = AZ_PARK_ANGLE
+                    elmc.commanded_angle = EL_PARK_ANGLE
 
             #End of while loop
             sleep(0.5)
