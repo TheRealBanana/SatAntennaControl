@@ -1,4 +1,4 @@
-_VERSION_ = 0.3
+_VERSION_ = "0.5a"
 
 import RPi.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
@@ -251,16 +251,18 @@ class ElMotorControl(threading.Thread):
         #Ideally we would use a single function or proportionality constant to set the speed based on distance to target.
         #That would require tuning and I know those duty cycle constants more or less work. Only minor adjustments needed.
         movespeed = self.speed # PWM duty cycle is between 0 and 100
+
+        #Needs more duty cycle when at lower elevations to compensate for gravity pulling the dish down.
         if anglediff > 5:
             pass # no slowdown, 100 duty cycle
         elif anglediff > 2: # Between 5 and 2 degrees, first slowdown
-            movespeed *= SLOWDOWN_PCT
+            movespeed = 40
         elif anglediff > 1: #Between 1 and 2 degrees, second slowdown
-            movespeed *= SLOWDOWN_PCT**2
+            movespeed = 30
         elif anglediff >= self.encoder.ANGLE_TICK*3: #between a degree difference and 3 ANGLE_TICKs
-            movespeed *= SLOWDOWN_PCT**3 # Duty cycle of 1.5625%
+            movespeed = 15
         else: # Between 3 ticks and our target we really crawl slowly
-            movespeed = 0.1 #Slowest move speed possible
+            movespeed = 12.5 #Slowest move speed possible cant move the elevation axis from 0 or 180 so we have to go kinda slow.
 
         #Ok now we know what motor to activate and how fast it should move.
         movefun(movespeed)
@@ -926,6 +928,8 @@ def terminal_interface(azmc, elmc):
                     #AAAAnd now park
                     azmc.commanded_angle = AZ_PARK_ANGLE
                     elmc.commanded_angle = EL_PARK_ANGLE
+                    inp = "BYPASS"
+                    command = "watch"
 
             #End of while loop
             sleep(0.5)
