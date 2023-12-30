@@ -1,4 +1,4 @@
-_VERSION_ = "0.5a"
+_VERSION_ = "0.6"
 
 import RPi.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
@@ -21,7 +21,10 @@ ANTENNA_GPS_ALT = 0 # in kilometers
 #Minimum elevation before we start and stop our tracking. 0 is perfectly at the horizon.
 #Most location have obstructions around the horizon so that part of the pass is wasted.
 #If you know what elevation you start getting a clear line-of-sight then enter that below.
-TRACKING_START_ELEVATION = 5
+TRACKING_START_ELEVATION = 0
+
+# Filter out satellite passes with max elevations below this number (in degrees) from the passlist
+PASSLIST_FILTER_ELEVATION = 20
 
 PWM_FREQUENCY = 2000
 
@@ -172,7 +175,16 @@ class ElMotorControl(threading.Thread):
         #Elevation axis is using a pair of physical endstop switches that are pulled high and go low when activated
         GPIO.setup(self.yellow_endstop, GPIO.IN, pull_up_down=GPIO.PUD_UP)
         GPIO.setup(self.blue_endstop, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+        # Feel like I need to explain the below angle_fuzz. In an ideal world, the end stops for the elevation axis would be
+        # perfectly symmetrical in their positioning, and going from one to the other and splitting the difference should be
+        # exactly 90 degrees. Well on the first test it wasn't 90 degrees, it was slightly off. So I just kept trying slightly
+        # different values of angle_fuzz until it came out level, and thats the number below. Its something to do with the
+        # screw and nut positions on the mechanical endstops. I think a magnetic endstop would be more precise between the two.
+        # Theoretically a nut moves a specific amount per turn, as defined by the thread pitch. So screwing the nuts the
+        # same number of times should line them up perfectly, but it doesn't. Manufacturing tolerances arent good enough maybe.
         self.angle_fuzz = 89.5 #What angle to set to after we go to what we "think" is 90 degrees.
+
         # New method of moving, instead of being prompted a single angle and moving towards it we will constantly evaluate
         # what the commanded angle is vs our current angle. Speed and direction to be calculated every loop iteration.
         self.commanded_angle = EL_PARK_ANGLE #Starting at park since we go there after calibrating.
@@ -429,6 +441,9 @@ class AzMotorControl(threading.Thread):
     def run(self):
         self.find_home()
         print("\n\n")
+        #Would 10 loop iterations a second really be too slow? Maybe 50?
+        #100 per second uses about 10% CPU on the pi4 which is kinda crazy.
+        #That goes down to around 4% with spikes to 8% if you estop
         ops = 100
         while self.quitting is False:
             #If we decided to re-home the axis, we don't want our loop overriding its commands. We also don't really want
@@ -460,6 +475,9 @@ class AzMotorControl(threading.Thread):
         #Maybe we could even use that tick number to track the true position and unwind later.
         # This function is constantly called as a background thread, constantly evaluating and commanding movements.
         actualdistance = self.commanded_angle - self.encoder.curangle
+        #TODO Would a subtick stop check here help the CPU usage much?
+        #Looks like we do a LOT of math before we figure out we arent moving.
+        #No wonder it uses 10% just sitting there.
         if abs(actualdistance) < 180: # shorter movements are normal movements
             #Determine which way to turn the motor
             if self.commanded_angle > self.encoder.curangle:
@@ -514,7 +532,7 @@ class AzMotorControl(threading.Thread):
 
         #Instead of doing all the slowdown stuff here, we'll just shoot for a positive value and then
         #do a move_to_angle() to finish it off.
-        target_angle = 5 # 5 is a safe spot, even if stop at full speed we wont overrun enough to matter.
+        target_angle = 5 # 5 is a safe spot, even if we stop at full speed we wont overrun enough to matter.
         target_tick = round(target_angle / AZ_ANGLE_TICK)
 
         #determine direction.
@@ -533,10 +551,8 @@ class AzMotorControl(threading.Thread):
         while tickdiff > 0:
             if self.encoder.curangle > 360: self.encoder.curangle %= 360
             tickdiff = anglesign * (self.encoder.curtick - target_tick)
-            if GPIO.input(self.he_sensor) == 0:
-                addtext = " - HE SEN ACTIVE - TDIFF: %s" % tickdiff
-            else:
-                addtext = " - TDIFF: %s" % tickdiff
+            addtext = " - TDIFF: %s" % tickdiff
+            if GPIO.input(self.he_sensor) == 0: addtext = " - HE SEN ACTIVE" + addtext
             print(" "*100, end="\r") # Blank out the line before reprinting, otherwise old crap can be left behind
             print("Current angle: %s degrees [%s] %s" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick(), addtext), end="\r")
             sleep(0.01)
@@ -548,7 +564,6 @@ class AzMotorControl(threading.Thread):
         #Reset commanded angle to 0 and resume follower function
         self.commanded_angle = 0
         self.stop_movement = False
-
 
     def stop_motor(self):
         self.AZ_motor_PWM_out.ChangeDutyCycle(0)
@@ -570,17 +585,11 @@ class AzMotorControl(threading.Thread):
     def move_until_stop(self, speed=100):
         self.move_motor_dir2(speed=speed)
         stopstate = GPIO.input(self.he_sensor)
-        angle_every_seconds = 0.1 #Output current angle every 2 seconds
-        curtime = time()
-        lasttime = curtime
         while stopstate > 0:
             sleep(0.1)
             stopstate = GPIO.input(self.he_sensor)
-            curtime = time()
-            if curtime - lasttime > angle_every_seconds:
-                lasttime = curtime
-                print(" "*50, end="\r")
-                print("Current azimuth angle: %s degrees [%s]" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick()), end="\r")
+            print(" "*50, end="\r")
+            print("Current azimuth angle: %s degrees [%s]" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick()), end="\r")
         print("\nHit azimuth endstop, stopping motor!")
         self.stop_motor()
 
@@ -815,7 +824,7 @@ def terminal_interface(azmc, elmc):
                             #Loop is too fast so sometimes there isnt a change between checks.
                             #If we have no change for 5 iterations then we assume we're done.
                             if count > 5:
-                                print("\n\nAt target position: AZ %s degrees [%s] -- EL %s degrees [%s]\n" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick))
+                                print("\n\nAt target position: AZ %s degrees [%s]\t--\tEL %s degrees [%s]\n" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick))
                                 break
                             else: count += 1
                         else:
@@ -825,7 +834,7 @@ def terminal_interface(azmc, elmc):
                         eldiff = ellast - elmc.encoder.curangle
                         ellast = elmc.encoder.curangle
                         print(" "*100, end="\r") #Blanking line 100 chars long
-                        print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
+                        print("Current antenna position: AZ %s degrees [%s]\t--\tEL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
                         sleep(0.1)
                 except KeyboardInterrupt:
                     print("\n")
@@ -841,7 +850,8 @@ def terminal_interface(azmc, elmc):
                 if len(args) == 0:
                     print("You must include a satellite name to list passes for!")
                     continue
-                passes = satfind.passlist(args)
+                #Just for display, use the display filter horizon limit
+                passes = satfind.passlist(args, PASSLIST_FILTER_ELEVATION)
                 if passes is not None:
                     satparams = satfind.getsatparams(args)
                     satfind.printpasses(satparams, passes)
@@ -854,7 +864,10 @@ def terminal_interface(azmc, elmc):
                         print("You must include a satellite name to track!")
                         continue
                     satparams = satfind.getsatparams(satname)
-                    passes = satfind.passlist(satname)
+                    #Unfiltered list for proper start/stop elevations
+                    passes = satfind.passlist(satname, TRACKING_START_ELEVATION)
+                    #Filter out passes with max elevations below our filter limit
+                    passes = satfind.filterpasses(satparams, passes, PASSLIST_FILTER_ELEVATION)
                     if passes is None:
                         continue
                     satfind.printpasses(satparams, passes)
@@ -881,6 +894,8 @@ def terminal_interface(azmc, elmc):
                         print("Canceling tracking...")
                         continue
                     elif startmove == "y":
+                        #print("Unwinding mast to home position before moving to start position...") # unwind_mast() prints basically the same thing
+                        azmc.unwind_mast()
                         print("Moving to starting position...")
                         azmc.commanded_angle = startaz
                         elmc.commanded_angle = startel
@@ -948,6 +963,16 @@ class SatFinder:
         for sat in self.satnames:
             print(sat)
 
+    #Takes in a passlist, filters out passes with max elevations under the elevation_limit, and returns the list
+    def filterpasses(self, satparams, passlist, elevation_limit):
+        filteredpasses = []
+        for passdata in passlist:
+            _, maxelevation = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
+            if float(maxelevation) < elevation_limit:
+                continue
+            filteredpasses.append(passdata)
+        return filteredpasses
+
     def printpasses(self, satparams, passlist):
         #Go over the list and pull out some details, then print each one
         for i, passdata in enumerate(passlist):
@@ -979,11 +1004,11 @@ class SatFinder:
             direction = ns[di]
             print("%s) %s - %s%s degree MEL pass (%s Long) heading %s in %s - duration %s" % (i, nicestarttime, round(max_location[1]), eastwest, longtext, direction, startimetext, durationtext))
 
-    def passlist(self, satname):
+    def passlist(self, satname, horizon_limit):
         satparams = self.getsatparams(satname)
         if satparams is None:
             return None
-        passlist = satparams.get_next_passes(datetime.now(pytz.utc), 24, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT, horizon=TRACKING_START_ELEVATION) #Next 24 hours
+        passlist = satparams.get_next_passes(datetime.now(pytz.utc), 24, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT, horizon=horizon_limit) #Next 24 hours
         if len(passlist) > 0:
             print("Found %s passes in the next 24 hours for '%s'." % (len(passlist), satname))
         else:
