@@ -1,4 +1,4 @@
-_VERSION_ = "0.61"
+_VERSION_ = "0.62"
 
 import RPi.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
@@ -666,7 +666,7 @@ class AzMotorControl(threading.Thread):
 def loadgpscoords():
     global ANTENNA_GPS_LAT, ANTENNA_GPS_LONG, ANTENNA_GPS_ALT
 
-    matchreg = re.compile("ANTENNA_GPS_(LAT|LONG|ALT)\s*=\s*([0-9]{1,3}(?:\.[0-9]{1,6})?)")
+    matchreg = re.compile("ANTENNA_GPS_(LAT|LONG|ALT)\s*=\s*(-?[0-9]{1,3}(?:\.[0-9]{1,6})?)")
     #Group 1 = LAT, LONG, or ALT
     #Group 2 = float
 
@@ -683,8 +683,8 @@ def loadgpscoords():
                         case "LONG": ANTENNA_GPS_LONG = float(m.group(2))
                         case "ALT": ANTENNA_GPS_ALT = float(m.group(2))
                     print("Set GPS coords: %s to %s" % (m.group(1), m.group(2)))
-
-    print("No gpscoords.txt file to load from, using defaults.")
+    else:
+        print("No gpscoords.txt file to load from, using defaults.")
 
 
 def terminal_interface(azmc, elmc):
@@ -866,6 +866,9 @@ def terminal_interface(azmc, elmc):
 
             elif command == "updatetle":
                 satfind.updatetle()
+
+            elif command == "gpscoords":
+                print("Current GPS Coords: %s, %s (Alt: %s)" % (ANTENNA_GPS_LAT, ANTENNA_GPS_LONG, ANTENNA_GPS_ALT))
 
             elif command == "v" or command == "version":
                 print("Antenna Control version %s" % _VERSION_)
@@ -1049,9 +1052,9 @@ class SatFinder:
         #Filter out passes with max elevations below our filter limit
         passlist = self.filterpasses(satparams, passlist, PASSLIST_FILTER_ELEVATION)
         if len(passlist) > 0:
-            print("Found %s passes in the next 24 hours for '%s'." % (len(passlist), satname))
+            print("Found %s passes in the next %s hours for '%s'." % (len(passlist), time_limit, satname))
         else:
-            print("No passes for %s in the next 24 hours using current TLE data." % satname)
+            print("No passes for %s in the next %s hours using current TLE data." % (satname, time_limit))
             return None
         return passlist
 
