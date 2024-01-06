@@ -24,7 +24,7 @@ ANTENNA_GPS_ALT = 0 # in kilometers
 TRACKING_START_ELEVATION = 0
 
 # Filter out satellite passes with max elevations below this number (in degrees) from the passlist
-PASSLIST_FILTER_ELEVATION = 20
+PASSLIST_FILTER_ELEVATION = 15
 
 PWM_FREQUENCY = 2000
 
@@ -850,8 +850,7 @@ def terminal_interface(azmc, elmc):
                 if len(args) == 0:
                     print("You must include a satellite name to list passes for!")
                     continue
-                #Just for display, use the display filter horizon limit
-                passes = satfind.passlist(args, PASSLIST_FILTER_ELEVATION)
+                passes = satfind.passlist(args)
                 if passes is not None:
                     satparams = satfind.getsatparams(args)
                     satfind.printpasses(satparams, passes)
@@ -864,10 +863,7 @@ def terminal_interface(azmc, elmc):
                         print("You must include a satellite name to track!")
                         continue
                     satparams = satfind.getsatparams(satname)
-                    #Unfiltered list for proper start/stop elevations
-                    passes = satfind.passlist(satname, TRACKING_START_ELEVATION)
-                    #Filter out passes with max elevations below our filter limit
-                    passes = satfind.filterpasses(satparams, passes, PASSLIST_FILTER_ELEVATION)
+                    passes = satfind.passlist(satname)
                     if passes is None:
                         continue
                     satfind.printpasses(satparams, passes)
@@ -1004,11 +1000,16 @@ class SatFinder:
             direction = ns[di]
             print("%s) %s - %s%s degree MEL pass (%s Long) heading %s in %s - duration %s" % (i, nicestarttime, round(max_location[1]), eastwest, longtext, direction, startimetext, durationtext))
 
-    def passlist(self, satname, horizon_limit):
+    def passlist(self, satname):
         satparams = self.getsatparams(satname)
         if satparams is None:
             return None
-        passlist = satparams.get_next_passes(datetime.now(pytz.utc), 24, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT, horizon=horizon_limit) #Next 24 hours
+        #Horizon limit will affect the start and finish times of the pass and the displayed total duration
+        #Do we want to know how long the pass will take with our tracking limits or how long the pass is from horizon to horizon?
+        #For now we're counting from the tracking limits.
+        passlist = satparams.get_next_passes(datetime.now(pytz.utc), 24, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT, horizon=TRACKING_START_ELEVATION) #Next 24 hours
+        #Filter out passes with max elevations below our filter limit
+        passlist = self.filterpasses(satparams, passlist, PASSLIST_FILTER_ELEVATION)
         if len(passlist) > 0:
             print("Found %s passes in the next 24 hours for '%s'." % (len(passlist), satname))
         else:
