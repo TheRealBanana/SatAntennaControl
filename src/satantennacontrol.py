@@ -13,6 +13,7 @@ from difflib import SequenceMatcher
 
 
 
+#Defaults. Actual coords read in from file gpscoords.txt in the same dir as this file.
 ANTENNA_GPS_LAT = 34
 ANTENNA_GPS_LONG = -117
 ANTENNA_GPS_ALT = 0 # in kilometers
@@ -662,11 +663,32 @@ class AzMotorControl(threading.Thread):
         self.encoder.reset_position()
         self.homed = True
 
+def loadgpscoords():
+    global ANTENNA_GPS_LAT, ANTENNA_GPS_LONG, ANTENNA_GPS_ALT
+
+    matchreg = re.compile("ANTENNA_GPS_(LAT|LONG|ALT)\s*=\s*([0-9]{1,3}(?:\.[0-9]{1,6})?)")
+    #Group 1 = LAT, LONG, or ALT
+    #Group 2 = float
+
+    if os.access("gpscoords.txt", os.F_OK):
+        print("Found gpscoords.txt file, loading...")
+        with open("gpscoords.txt", "r") as coordsfile:
+            line = '.'
+            while line != "":
+                line = coordsfile.readline()
+                m = matchreg.match(line)
+                if m is not None:
+                    match m.group(1):
+                        case "LAT": ANTENNA_GPS_LAT = float(m.group(2))
+                        case "LONG": ANTENNA_GPS_LONG = float(m.group(2))
+                        case "ALT": ANTENNA_GPS_ALT = float(m.group(2))
+                    print("Set GPS coords: %s to %s" % (m.group(1), m.group(2)))
+
+    print("No gpscoords.txt file to load from, using defaults.")
+
 
 def terminal_interface(azmc, elmc):
     satfind = SatFinder()
-
-
     print("Homing each axis separately, starting with the azimuth.")
     #Starting the thread initiates the homing processes and then waits for changes to its commanded angle
     azmc.start()
@@ -677,6 +699,9 @@ def terminal_interface(azmc, elmc):
     while elmc.homed is False:
         sleep(0.1)
     print("Finished homing axes, starting user input loop...\n")
+
+    #Load GPS coords stored in a file if it exists
+    loadgpscoords()
 
     command = ""
     args = ""
