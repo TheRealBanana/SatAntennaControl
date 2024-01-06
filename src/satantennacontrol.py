@@ -1,4 +1,4 @@
-_VERSION_ = "0.6"
+_VERSION_ = "0.61"
 
 import RPi.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
@@ -26,7 +26,6 @@ TRACKING_START_ELEVATION = 0
 # Filter out satellite passes with max elevations below this number (in degrees) from the passlist
 PASSLIST_FILTER_ELEVATION = 15
 
-PWM_FREQUENCY = 2000
 
 ##GPIO PIN MAPPINGS:
 
@@ -840,17 +839,31 @@ def terminal_interface(azmc, elmc):
                     print("\n")
                     continue
 
+            elif command == "updatetle":
+                satfind.updatetle()
+
             elif command == "v" or command == "version":
                 print("Antenna Control version %s" % _VERSION_)
 
             elif command == "satlist":
                 satfind.satlist()
 
+            #Support input of timeframe directly after command and before sat name
+            # e.g. passlist 48 meteor-m2 2
+            # would give passes for the next 48 hours for meteor-m2 2
+            # No number there would default to 24h
             elif command == "passlist": # Generate a 24 hour passlist for a specific satellite
+                #Check for time limit. None of the satellites start with a number so this should be reliable.
+                argsplit = re.split(" ", args)
+                if argsplit[0].isdigit():
+                    tlimit = int(argsplit[0])
+                    args = " ".join(argsplit[1:])
+                else:
+                    tlimit = 24 # Default limit of 24 hours
                 if len(args) == 0:
                     print("You must include a satellite name to list passes for!")
                     continue
-                passes = satfind.passlist(args)
+                passes = satfind.passlist(args, tlimit)
                 if passes is not None:
                     satparams = satfind.getsatparams(args)
                     satfind.printpasses(satparams, passes)
@@ -863,7 +876,7 @@ def terminal_interface(azmc, elmc):
                         print("You must include a satellite name to track!")
                         continue
                     satparams = satfind.getsatparams(satname)
-                    passes = satfind.passlist(satname)
+                    passes = satfind.passlist(satname, 24) # A full day is a long time to wait parked for a track
                     if passes is None:
                         continue
                     satfind.printpasses(satparams, passes)
@@ -1000,14 +1013,14 @@ class SatFinder:
             direction = ns[di]
             print("%s) %s - %s%s degree MEL pass (%s Long) heading %s in %s - duration %s" % (i, nicestarttime, round(max_location[1]), eastwest, longtext, direction, startimetext, durationtext))
 
-    def passlist(self, satname):
+    def passlist(self, satname, time_limit):
         satparams = self.getsatparams(satname)
         if satparams is None:
             return None
         #Horizon limit will affect the start and finish times of the pass and the displayed total duration
         #Do we want to know how long the pass will take with our tracking limits or how long the pass is from horizon to horizon?
         #For now we're counting from the tracking limits.
-        passlist = satparams.get_next_passes(datetime.now(pytz.utc), 24, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT, horizon=TRACKING_START_ELEVATION) #Next 24 hours
+        passlist = satparams.get_next_passes(datetime.now(pytz.utc), time_limit, ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT, horizon=TRACKING_START_ELEVATION) #Next 24 hours
         #Filter out passes with max elevations below our filter limit
         passlist = self.filterpasses(satparams, passlist, PASSLIST_FILTER_ELEVATION)
         if len(passlist) > 0:
