@@ -98,7 +98,7 @@ AZ_PARK_ANGLE = 0 # Park azimuth at 0 (which should be due north)
 #Because i'm too lazy to implement the full PID control I have to deal with low elevation issues.
 #Gravity pulls the dish down harder against the motors the lower its elevation, so below a certain critical angle
 #we have to increase our PWM constants to compensate. Seems like around 10-20 degrees we start tracking normally again.
-ELEVATION_CRIT_ANGLE = 10
+ELEVATION_CRIT_ANGLE = 15
 ELEVATION_CRIT_MULTI = 1.5 # How much do we increase by?
 
 #Trying to find a ratio so I don't need to remember the exact way to specify meteor-m2 3
