@@ -1,5 +1,8 @@
-_VERSION_ = "0.62"
+_VERSION_ = "0.63"
 
+#Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
+#program or the pi having issues. Probably the pyorbital library.
+print("Loading libraries...")
 import RPi.GPIO as GPIO
 GPIO.setmode(GPIO.BCM)
 from time import sleep, time
@@ -8,6 +11,8 @@ from urllib.request import urlretrieve
 from pyorbital import orbital
 import threading, re, os, os.path, pytz
 from difflib import SequenceMatcher
+from json import loads as json_loads
+from json.decoder import JSONDecodeError
 
 #NEEDED FOR SATELLITE TRACKING!
 
@@ -158,7 +163,7 @@ class RotaryEncoder:
     def getCurrentAngle(self): return round(self.curangle, 3) #Round curangle to 3 digits to prevent weird scientific notation output for small values near 0
 
 class ElMotorControl(threading.Thread):
-    def __init__(self, BIN1=EL_BIN1, BIN2=EL_BIN2, PWMB=EL_PWMB, YELLOW_ENDSTOP=EL_ENDSTOP_YELLOW, BLUE_ENDSTOP=EL_ENDSTOP_BLUE):
+    def __init__(self, BIN1=EL_BIN1, BIN2=EL_BIN2, PWMB=EL_PWMB, YELLOW_ENDSTOP=EL_ENDSTOP_YELLOW, BLUE_ENDSTOP=EL_ENDSTOP_BLUE, recovery_data=None):
         super(ElMotorControl, self).__init__()
         self.encoder = RotaryEncoder(EL_POS_OUTA, EL_POS_OUTB, EL_ANGLE_TICK)
         self.bin1 = BIN1
@@ -166,6 +171,7 @@ class ElMotorControl(threading.Thread):
         self.pwmb = PWMB
         self.yellow_endstop = YELLOW_ENDSTOP
         self.blue_endstop = BLUE_ENDSTOP
+        self.recovery_data = recovery_data
         #Setup pins and PWM channel
         GPIO.setup(self.bin1, GPIO.OUT, initial=GPIO.LOW)
         GPIO.setup(self.bin2, GPIO.OUT, initial=GPIO.LOW)
@@ -196,9 +202,16 @@ class ElMotorControl(threading.Thread):
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_commanded_angle() loop
     def run(self):
-        self.calhome()
-        print("\n\n")
-        #We should be parked at 90 degrees at this point. Now we start our loop.
+        if self.recovery_data is None:
+            self.calhome()
+            print("\n\n")
+        else:
+            print("Bypassing homing and using recovery data on the elevation axis.")
+            self.encoder.curangle = self.recovery_data["ElevationDeg"]
+            self.commanded_angle = self.encoder.curangle
+            self.encoder.curtick = self.recovery_data["ElevationTick"]
+            self.homed = True
+        #We should be parked at 90 degrees at this point or at a recovered position. Now we start our loop.
         #How many operations per second should the loop run at? Default value is 100 times per second. Could probably get away with less.
         ops = 100
         while self.quitting is False:
@@ -310,11 +323,11 @@ class ElMotorControl(threading.Thread):
         else:
             raise(Exception("Syntax error with move_until_stop call. Check line 165."))
         stopstate = GPIO.input(es)
-        angle_every_seconds = 0.1 #Output current angle every 2 seconds
+        angle_every_seconds = 0.1
         curtime = time()
         lasttime = curtime
         while stopstate > 0:
-            sleep(0.1)
+            sleep(0.01)
             stopstate = GPIO.input(es)
             curtime = time()
             if curtime - lasttime > angle_every_seconds:
@@ -415,13 +428,14 @@ class ElMotorControl(threading.Thread):
 
 
 class AzMotorControl(threading.Thread):
-    def __init__(self, AIN1=AZ_AIN1, AIN2=AZ_AIN2, PWMA=AZ_PWMA, he_sensor=AZ_MAG_SENSOR):
+    def __init__(self, AIN1=AZ_AIN1, AIN2=AZ_AIN2, PWMA=AZ_PWMA, he_sensor=AZ_MAG_SENSOR, recovery_data=None):
         super(AzMotorControl, self).__init__()
         self.encoder = RotaryEncoder(AZ_POS_OUTA, AZ_POS_OUTB, AZ_ANGLE_TICK)
         self.ain1 = AIN1
         self.ain2 = AIN2
         self.pwma = PWMA
         self.he_sensor = he_sensor
+        self.recovery_data = recovery_data
         #Setup needed pins and start PWM channel
         GPIO.setup(self.ain1, GPIO.OUT, initial=GPIO.LOW)
         GPIO.setup(self.ain2, GPIO.OUT, initial=GPIO.LOW)
@@ -439,8 +453,16 @@ class AzMotorControl(threading.Thread):
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_command_angle() loop
     def run(self):
-        self.find_home()
-        print("\n\n")
+        #Allow bypass of homing if we have recovery data
+        if self.recovery_data is None:
+            self.find_home()
+            print("\n\n")
+        else:
+            print("Bypassing homing and using recovery data on the azimuth axis.")
+            self.encoder.curangle = self.recovery_data["AzimuthDeg"]
+            self.commanded_angle = self.encoder.curangle
+            self.encoder.curtick = self.recovery_data["AzimuthTick"]
+            self.homed = True
         #Would 10 loop iterations a second really be too slow? Maybe 50?
         #100 per second uses about 10% CPU on the pi4 which is kinda crazy.
         #That goes down to around 4% with spikes to 8% if you estop
@@ -583,13 +605,19 @@ class AzMotorControl(threading.Thread):
         GPIO.output(self.ain2, GPIO.LOW)
 
     def move_until_stop(self, speed=100):
+        angle_every_seconds = 0.1
+        curtime = time()
+        lasttime = curtime
         self.move_motor_dir2(speed=speed)
         stopstate = GPIO.input(self.he_sensor)
         while stopstate > 0:
-            sleep(0.1)
+            sleep(0.01)
             stopstate = GPIO.input(self.he_sensor)
-            print(" "*50, end="\r")
-            print("Current azimuth angle: %s degrees [%s]" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick()), end="\r")
+            curtime = time()
+            if curtime - lasttime > angle_every_seconds:
+                lasttime = curtime
+                print(" "*50, end="\r")
+                print("Current azimuth angle: %s degrees [%s]" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick()), end="\r")
         print("\nHit azimuth endstop, stopping motor!")
         self.stop_motor()
 
@@ -993,7 +1021,6 @@ class SatFinder:
     def __init__(self):
         self.satnames = []
         self.updatetle()
-        self.updatesatnames()
 
     def satlist(self):
         print("Satellites in TLE file:")
@@ -1054,7 +1081,7 @@ class SatFinder:
         if len(passlist) > 0:
             print("Found %s passes in the next %s hours for '%s'." % (len(passlist), time_limit, satname))
         else:
-            print("No passes for %s in the next %s hours using current TLE data." % (satname, time_limit))
+            print("No passes above %sMEL for %s in the next %s hours using current TLE data." % (PASSLIST_FILTER_ELEVATION, satname, time_limit))
             return None
         return passlist
 
@@ -1088,6 +1115,7 @@ class SatFinder:
         return [None, highestmatch[0]]
 
     def updatesatnames(self):
+        print("Updating list of satellites names...")
         self.satnames = []
         with open("weather.txt", "r") as tlefile:
             line = tlefile.readline()
@@ -1108,9 +1136,11 @@ class SatFinder:
             if curtime - filemodtime > 3 * 24 * 60 * 60: # 3 days
                 print("Updating weather.txt TLE file...")
                 urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", "weather.txt")
+                self.updatesatnames()
         else:
             print("Downloading weather.txt TLE file...")
             urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", "weather.txt")
+            self.updatesatnames()
 
 def create_time_string(seconds_total):
     days = int(seconds_total/(60*60*24))
@@ -1131,10 +1161,59 @@ def create_time_string(seconds_total):
 def main():
     print("Welcome to Satellite Antenna Control v%s!" % _VERSION_)
     print("Setting up board and homing axes...")
+
+
+    # Check if we have position data to recover to
+    posdata = None
+    recovery_data = None
+    if os.access("./.active_position", os.F_OK):
+        with open("./.active_position") as saved_position_file:
+            # Example line:
+            # { "AzimuthDeg": 211.813, "AzimuthTick": -955, "ElevationDeg": 45.58, "ElevationTick": 253, "Is_Moving": false }
+            try:
+                posline = saved_position_file.readline()
+                posdata = json_loads(posline)
+            except JSONDecodeError:
+                print("Couldn't recover position data from file. Failed to load this line: ")
+                print(posline)
+                print("If you think the azimuth axis is currently wound up you may want to cancel running this program and manually unwind it to prevent any damage.")
+
+        print("Found sensor position data on file")
     sleep(3)
 
-    azmc = AzMotorControl()
-    elmc = ElMotorControl()
+    # At this point the variable posdata is either None or has something in it
+    # First we need to verify that ALL the data is present that we need.
+    needed_keys = ["AzimuthDeg", "AzimuthTick", "ElevationDeg", "ElevationTick", "Is_Moving"]
+    actual_keys = list(posdata.keys())
+    actual_keys.sort()
+    if needed_keys == actual_keys:
+        #Keys are valid, now lets check if the values are valid, they should all be floats or ints and the last a bool
+        ismoving = posdata.pop("Is_Moving")
+        if all([isinstance(t, (int, float)) for t in posdata.values()]):
+            #Add the ismoving back on
+            posdata["Is_Moving"] = ismoving
+            #TODO Should probably check values ranges here too but im lazy and just want this working now
+            #all the recovery data is hand-written at first anyway since theres no saving functions.
+            print("Recovery data passed basic checks. Here's what we got:\n")
+            print(posdata)
+            print("\n")
+            goodyn = '.'
+            while goodyn not in "yn":
+                goodyn = input("Does the above data look sane? (Y/N): ").lower()
+            if goodyn == "y":
+                print("Ok! Using the above recovery data instead of homing the antenna.")
+                recovery_data = posdata
+            else:
+                print("Not using recovery data. Antenna will go through the homing process normally.")
+        else:
+            print("Recovery data failed type checks, not using it.")
+    else:
+        print("Recovery data was incomplete so it won't be used. Here's what data we did have: ")
+        print(posdata.keys())
+
+    # We pass the recovery data (or just None) to the motor control classes and let them handle the rest
+    azmc = AzMotorControl(recovery_data=recovery_data)
+    elmc = ElMotorControl(recovery_data=recovery_data)
 
     try:
         #Start the terminal interface, which will also handle homing and starting the threads
