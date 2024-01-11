@@ -232,6 +232,9 @@ class ElMotorControl(threading.Thread):
     def quitthread(self):
         #If we were called externally then set the internal quitting flag true so the loop can stop
         self.quitting = True
+        #Stop the movement follower function and go to park angle
+        self.stop_movement = True
+        self.move_to_angle(EL_PARK_ANGLE)
         #Stop the PWM channel or it causes problems when quitting python
         #Final app exit will handle the GPIO.cleanup()
         self.EL_motor_PWM_out.stop()
@@ -486,7 +489,7 @@ class AzMotorControl(threading.Thread):
             sleep(1.0/ops)
 
         print("AzMotorControl thread received quit signal. Exiting thread...")
-        self.quitthread()
+        self.quitthread() #Is this call necessary? Can we get here without someone calling quitthread() first?
 
     def quitthread(self):
         #If we were called externally then set the internal quitting flag true so the loop can stop
@@ -724,6 +727,8 @@ def loadgpscoords():
         print("No gpscoords.txt file to load from, using defaults.")
 
 
+#TODO Turn this into a simple class and have a main loop function that leads to functions for each command
+#Its so annoying to find the correct command to edit.
 def terminal_interface(azmc, elmc):
     satfind = SatFinder()
     print("Homing each axis separately, starting with the azimuth.")
@@ -736,9 +741,6 @@ def terminal_interface(azmc, elmc):
     while elmc.homed is False:
         sleep(0.1)
     print("Finished homing axes, starting user input loop...\n")
-
-    #Load GPS coords stored in a file if it exists
-    loadgpscoords()
 
     command = ""
     args = ""
@@ -1167,15 +1169,11 @@ def create_time_string(seconds_total):
         timestring += "%s seconds" % seconds
     return timestring
 
-def main():
-    print("Welcome to Satellite Antenna Control v%s!" % _VERSION_)
-    print("Setting up board and homing axes...")
-
-
-    # Check if we have position data to recover to
+def check_for_recovery_data():
     posdata = None
     recovery_data = None
     if os.access("./.active_position", os.F_OK):
+        print("Found active position data file, checking...")
         with open("./.active_position") as saved_position_file:
             # Example line:
             # { "AzimuthDeg": 211.813, "AzimuthTick": -955, "ElevationDeg": 45.58, "ElevationTick": 253, "Is_Moving": false }
@@ -1186,9 +1184,6 @@ def main():
                 print("Couldn't recover position data from file. Failed to load this line: ")
                 print(posline)
                 print("If you think the azimuth axis is currently wound up you may want to cancel running this program and manually unwind it to prevent any damage.")
-
-        print("Found sensor position data on file")
-    sleep(3)
 
     # At this point the variable posdata is either None or has something in it
     # First we need to verify that ALL the data is present that we need.
@@ -1220,7 +1215,21 @@ def main():
         print("Recovery data was incomplete so it won't be used. Here's what data we did have: ")
         print(posdata.keys())
 
-    # We pass the recovery data (or just None) to the motor control classes and let them handle the rest
+    return recovery_data
+
+def main():
+    print("Welcome to Satellite Antenna Control v%s!" % _VERSION_)
+    sleep(2)
+    print("Setting up board and homing axes...")
+    sleep(1)
+
+    #Load GPS coords stored in a file if it exists
+    loadgpscoords()
+
+    # Check if we have position data to recover to, returns None if there wasn't any to load.
+    recovery_data = check_for_recovery_data()
+
+    # Pass the recovery data (if any) to the motor control classes and let them handle the rest
     azmc = AzMotorControl(recovery_data=recovery_data)
     elmc = ElMotorControl(recovery_data=recovery_data)
 
@@ -1232,6 +1241,8 @@ def main():
         traceback.print_exc()
     finally:
         print("Satellite Antenna control program exit, cleaning up threads and GPIO...")
+        #TODO if we want to be able to quit without moving anything so we can restart with recovery data, these will mess things up.
+        #Will have to check if we're doing a recovery restart here and tell the threads to NOT home/park on quit.
         azmc.quitthread()
         elmc.quitthread()
         azmc.join()
