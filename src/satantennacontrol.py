@@ -1187,33 +1187,34 @@ def check_for_recovery_data():
 
     # At this point the variable posdata is either None or has something in it
     # First we need to verify that ALL the data is present that we need.
-    needed_keys = ["AzimuthDeg", "AzimuthTick", "ElevationDeg", "ElevationTick", "Is_Moving"]
-    actual_keys = list(posdata.keys())
-    actual_keys.sort()
-    if needed_keys == actual_keys:
-        #Keys are valid, now lets check if the values are valid, they should all be floats or ints and the last a bool
-        ismoving = posdata.pop("Is_Moving")
-        if all([isinstance(t, (int, float)) for t in posdata.values()]):
-            #Add the ismoving back on
-            posdata["Is_Moving"] = ismoving
-            #TODO Should probably check values ranges here too but im lazy and just want this working now
-            #all the recovery data is hand-written at first anyway since theres no saving functions.
-            print("Recovery data passed basic checks. Here's what we got:\n")
-            print(posdata)
-            print("\n")
-            goodyn = '.'
-            while goodyn not in "yn":
-                goodyn = input("Does the above data look sane? (Y/N): ").lower()
-            if goodyn == "y":
-                print("Ok! Using the above recovery data instead of homing the antenna.")
-                recovery_data = posdata
+    if posdata is not None:
+        needed_keys = ["AzimuthDeg", "AzimuthTick", "ElevationDeg", "ElevationTick", "Is_Moving"]
+        actual_keys = list(posdata.keys())
+        actual_keys.sort()
+        if needed_keys == actual_keys:
+            #Keys are valid, now lets check if the values are valid, they should all be floats or ints and the last a bool
+            ismoving = posdata.pop("Is_Moving")
+            if all([isinstance(t, (int, float)) for t in posdata.values()]):
+                #Add the ismoving back on
+                posdata["Is_Moving"] = ismoving
+                #TODO Should probably check values ranges here too but im lazy and just want this working now
+                #all the recovery data is hand-written at first anyway since theres no saving functions.
+                print("Recovery data passed basic checks. Here's what we got:\n")
+                print(posdata)
+                print("\n")
+                goodyn = '.'
+                while goodyn not in "yn":
+                    goodyn = input("Does the above data look sane? (Y/N): ").lower()
+                if goodyn == "y":
+                    print("Ok! Using the above recovery data instead of homing the antenna.")
+                    recovery_data = posdata
+                else:
+                    print("Not using recovery data. Antenna will go through the homing process normally.")
             else:
-                print("Not using recovery data. Antenna will go through the homing process normally.")
+                print("Recovery data failed type checks, not using it.")
         else:
-            print("Recovery data failed type checks, not using it.")
-    else:
-        print("Recovery data was incomplete so it won't be used. Here's what data we did have: ")
-        print(posdata.keys())
+            print("Recovery data was incomplete so it won't be used. Here's what data we did have: ")
+            print(posdata.keys())
 
     return recovery_data
 
