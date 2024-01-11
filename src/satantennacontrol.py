@@ -95,6 +95,11 @@ EL_ANGLE_TICK = 0.18
 EL_PARK_ANGLE = 90 # Straight up and down
 AZ_PARK_ANGLE = 0 # Park azimuth at 0 (which should be due north)
 
+#Because i'm too lazy to implement the full PID control I have to deal with low elevation issues.
+#Gravity pulls the dish down harder against the motors the lower its elevation, so below a certain critical angle
+#we have to increase our PWM constants to compensate. Seems like around 10-20 degrees we start tracking normally again.
+ELEVATION_CRIT_ANGLE = 10
+ELEVATION_CRIT_MULTI = 1.5 # How much do we increase by?
 
 #Trying to find a ratio so I don't need to remember the exact way to specify meteor-m2 3
 SATNAME_MATCH_RATIO = 0.89
@@ -285,9 +290,13 @@ class ElMotorControl(threading.Thread):
         elif anglediff > 1: #Between 1 and 2 degrees, second slowdown
             movespeed = 30
         elif anglediff >= self.encoder.ANGLE_TICK*3: #between a degree difference and 3 ANGLE_TICKs
-            movespeed = 15
+            movespeed = 20
         else: # Between 3 ticks and our target we really crawl slowly
-            movespeed = 12.5 #Slowest move speed possible cant move the elevation axis from 0 or 180 so we have to go kinda slow.
+            movespeed = 14 #Slowest move speed possible cant move the elevation axis from 0 or 180
+
+        #Small movements at low elevations are hard to do with normal PWM constants, so we buff them up a bit to help.
+        if self.encoder.curangle < ELEVATION_CRIT_ANGLE and anglediff < 5:
+            movespeed = round(movespeed * ELEVATION_CRIT_MULTI)
 
         #Ok now we know what motor to activate and how fast it should move.
         movefun(movespeed)
