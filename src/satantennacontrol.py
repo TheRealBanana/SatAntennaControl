@@ -1,4 +1,4 @@
-_VERSION_ = "0.64"
+_VERSION_ = "0.65"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -203,6 +203,7 @@ class ElMotorControl(threading.Thread):
         self.homed = False # So we can check when the homing processes ends
         self.stop_movement = False # For estop
         self.speed = 100 # So we can modulate move speed from the command line
+        self.is_moving = False
 
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_commanded_angle() loop
@@ -308,18 +309,21 @@ class ElMotorControl(threading.Thread):
         self.EL_motor_PWM_out.ChangeDutyCycle(0)
         GPIO.output(self.bin1, GPIO.LOW)
         GPIO.output(self.bin2, GPIO.LOW)
+        self.is_moving = False
 
     #This moves the elevation axis towards the blue endstop
     def move_motor_dir1(self, speed=100):
         self.EL_motor_PWM_out.ChangeDutyCycle(speed)
         GPIO.output(self.bin1, GPIO.HIGH)
         GPIO.output(self.bin2, GPIO.LOW)
+        self.is_moving = True
 
     #This moves the elevation axis towards the yellow endstop
     def move_motor_dir2(self, speed=100):
         self.EL_motor_PWM_out.ChangeDutyCycle(speed)
         GPIO.output(self.bin1, GPIO.LOW)
         GPIO.output(self.bin2, GPIO.HIGH)
+        self.is_moving = True
 
     def move_until_stop(self, direction, speed=100):
         if direction == 1:
@@ -463,6 +467,7 @@ class AzMotorControl(threading.Thread):
         self.homed = False
         self.stop_movement = False
         self.speed = 100
+        self.is_moving = False
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_command_angle() loop
     def run(self):
@@ -604,18 +609,21 @@ class AzMotorControl(threading.Thread):
         self.AZ_motor_PWM_out.ChangeDutyCycle(0)
         GPIO.output(self.ain1, GPIO.LOW)
         GPIO.output(self.ain2, GPIO.LOW)
+        self.is_moving = False
 
     #Turn clockwise
     def move_motor_dir1(self, speed=100):
         self.AZ_motor_PWM_out.ChangeDutyCycle(speed)
         GPIO.output(self.ain1, GPIO.LOW)
         GPIO.output(self.ain2, GPIO.HIGH)
+        self.is_moving = True
 
     #Turn counterclockwise
     def move_motor_dir2(self, speed=100):
         self.AZ_motor_PWM_out.ChangeDutyCycle(speed)
         GPIO.output(self.ain1, GPIO.HIGH)
         GPIO.output(self.ain2, GPIO.LOW)
+        self.is_moving = True
 
     def move_until_stop(self, speed=100):
         angle_every_seconds = 0.1
@@ -917,12 +925,41 @@ def terminal_interface(azmc, elmc):
             #azimuth is the exact azimuth of GOES. Same as manually calibrating azimuth but in software. We could even
             #save the offset to file and load it again.
             elif command == "setoffset":
-                print("OFFSET TEST ARGS: ")
-                print(args)
-                pass
+                args2 = args.split(" ")
+                if len(args2) != 2:
+                    print("Invalid number of arguments. First argument is axis, second is angle value. E.g. az 211.8")
+                    continue
+                axis = args2[0]
+                angle = args2[1]
+                if angle.count(".") > 1 or angle.replace(".", "").isnumeric() is False:
+                    print("Invalid second argument, must be an int or float. E.g. az 211.8")
+                    continue
+                angle = float(angle)
+                #Should be mostly valid args now. We'll check ranges for each axis specifically.
+                if axis == "az":
+                    if abs(angle) < MAX_AZ_INPUT_ANGLE:
+                        print("WARNING! Manually adjusting the azimuth offset could lead to a situation where unwinding is ineffective at preventing catastrophic failure of the wiring harness!")
+                        if abs(angle - azmc.encoder.curangle) > 5:
+                            print("For safety, adjustments of more than 5 degrees are not allowed. If your mast is off by that much you need to manually realign it. This function is for fine adjustment only.")
+                            continue
+                        yn = '.'
+                        while yn not in "yn":
+                            #TODO DETERMINE WHAT TICK NUMBER
+                            yn = input("Changing azimuth angle from %s [%s] to %s [%s], are you sure you want to do this? (Y/N): ").lower()
+                        if yn == "y":
+                            print("Ok updating azimuth angle to %s degrees (tick number %s)...")
+                        else:
+                            print("Canceling offset update...")
+                            continue
+                elif axis == "el":
+                    pass
+                else:
+                    print("You must pass either az or el before the updated angle. E.g. az 211.8")
+
 
             elif command == "d":
                 print("Current commanded angles (AZ, EL): (%s, %s)" % (azmc.commanded_angle, elmc.commanded_angle))
+                print("Motor movement status (AZ, EL): (%s, %s)" % (str(azmc.is_moving), str(elmc.is_moving)))
 
             elif command == "v" or command == "version":
                 print("Antenna Control version %s" % _VERSION_)
