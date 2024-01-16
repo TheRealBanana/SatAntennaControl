@@ -435,6 +435,7 @@ class ElMotorControl(threading.Thread):
         #Turns out with my specific system theres some slop SOMEWHERE and its actually about 89 degrees. Some minute different in the endstops. Gotta find a better way.
         #self.encoder.set_encoder_angle(89)
         self.encoder.set_encoder_angle(self.angle_fuzz)
+        self.commanded_angle = self.encoder.curangle
         self.homed = True
 
 
@@ -701,6 +702,7 @@ class AzMotorControl(threading.Thread):
         print("\nFound final home position! Resetting counters. Be warned that endstops are not used to prevent over-travel on the azimuth axis.")
         #Reset encoder position for the final time, should be an accurate and repeatable zero.
         self.encoder.reset_position()
+        self.commanded_angle = self.encoder.curangle
         self.homed = True
 
 def loadgpscoords():
@@ -908,6 +910,9 @@ def terminal_interface(azmc, elmc):
 
             elif command == "gpscoords":
                 print("Current GPS Coords: %s, %s (Alt: %s)" % (ANTENNA_GPS_LAT, ANTENNA_GPS_LONG, ANTENNA_GPS_ALT))
+
+            elif command == "d":
+                print("Current commanded angles (AZ, EL): (%s, %s)" % (azmc.commanded_angle, elmc.commanded_angle))
 
             elif command == "v" or command == "version":
                 print("Antenna Control version %s" % _VERSION_)
