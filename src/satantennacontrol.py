@@ -1,4 +1,4 @@
-_VERSION_ = "0.63"
+_VERSION_ = "0.64"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -98,7 +98,7 @@ AZ_PARK_ANGLE = 0 # Park azimuth at 0 (which should be due north)
 #Because i'm too lazy to implement the full PID control I have to deal with low elevation issues.
 #Gravity pulls the dish down harder against the motors the lower its elevation, so below a certain critical angle
 #we have to increase our PWM constants to compensate. Seems like around 10-20 degrees we start tracking normally again.
-ELEVATION_CRIT_ANGLE = 15
+ELEVATION_CRIT_ANGLE = 20
 ELEVATION_CRIT_MULTI = 1.5 # How much do we increase by?
 
 #Trying to find a ratio so I don't need to remember the exact way to specify meteor-m2 3
@@ -265,7 +265,7 @@ class ElMotorControl(threading.Thread):
         #more is over the target. Here we test that by comparing the difference in angle to the smallest increment
         #of our rotary encoder (self.encoder.ANGLE_TICK)
         anglediff = anglesign * (self.commanded_angle - self.encoder.curangle)
-        if anglediff < self.encoder.ANGLE_TICK:
+        if abs(anglediff) < self.encoder.ANGLE_TICK:
             self.stop_motor()
             return # Can't reach exact commanded value because its between the smallest increment we can detect.
 
@@ -537,7 +537,7 @@ class AzMotorControl(threading.Thread):
             # use the new numbers and determine to move the opposite way. And it slows down before target anyway so it should be fine.
             anglediff = 360 - abs(actualdistance)
 
-        if anglediff < self.encoder.ANGLE_TICK:
+        if abs(anglediff) < self.encoder.ANGLE_TICK:
             self.stop_motor()
             return # Can't reach exact commanded value because its between the smallest increment we can detect.
 
@@ -910,6 +910,16 @@ def terminal_interface(azmc, elmc):
 
             elif command == "gpscoords":
                 print("Current GPS Coords: %s, %s (Alt: %s)" % (ANTENNA_GPS_LAT, ANTENNA_GPS_LONG, ANTENNA_GPS_ALT))
+
+            #Here we can manually change what our azimuth or elevation currently is
+            #Say you point at GOES but find the strongest signal is actually .2 degrees to the left.
+            #You point the antenna at the strongest spot and then use this command to tell the program its current
+            #azimuth is the exact azimuth of GOES. Same as manually calibrating azimuth but in software. We could even
+            #save the offset to file and load it again.
+            elif command == "setoffset":
+                print("OFFSET TEST ARGS: ")
+                print(args)
+                pass
 
             elif command == "d":
                 print("Current commanded angles (AZ, EL): (%s, %s)" % (azmc.commanded_angle, elmc.commanded_angle))
