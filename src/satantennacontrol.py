@@ -1,4 +1,4 @@
-_VERSION_ = "0.65"
+_VERSION_ = "0.66"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -103,6 +103,9 @@ ELEVATION_CRIT_MULTI = 1.5 # How much do we increase by?
 
 #Trying to find a ratio so I don't need to remember the exact way to specify meteor-m2 3
 SATNAME_MATCH_RATIO = 0.89
+
+#How many days between updating TLE data?
+TLE_UPDATE_FREQ_DAYS = 3
 
 class RotaryEncoder:
     CLOCKWISE=1
@@ -883,32 +886,20 @@ def terminal_interface(azmc, elmc):
 
             elif command == "w" or command == "watch":
                 try:
-                    #I might want a watch command that doesn't exit ever, but for now it would be nice if this ended when the movement was over
-                    #I couldn't figure out a nice way to do this with both axes in a way that was aware of the azimuths possible opposite movement
-                    #So I just track the differences in angle over the iterations and when it stops changing we stop watching
-                    #Start with a number that is much different so we will get at least 1 iteration
-                    azlast = azmc.encoder.curangle
-                    azdiff = 1
-                    ellast = elmc.encoder.curangle
-                    eldiff = 1
-                    count = 0 # I hate this code but it works lol.
-                    while True:
-                        if azdiff == 0 and eldiff == 0:
-                            #Loop is too fast so sometimes there isnt a change between checks.
-                            #If we have no change for 5 iterations then we assume we're done.
-                            if count > 5:
-                                print("\n\nAt target position: AZ %s degrees [%s]\t--\tEL %s degrees [%s]\n" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick))
-                                break
-                            else: count += 1
-                        else:
-                            count = 0
-                        azdiff = azlast - azmc.encoder.curangle
-                        azlast = azmc.encoder.curangle
-                        eldiff = ellast - elmc.encoder.curangle
-                        ellast = elmc.encoder.curangle
+                    timercount = 0
+                    pausedelay = 1 #How long in seconds do we wait after is_moving is false on both axis to stop tracking movement?
+                    while timercount < pausedelay/0.1:
+                    #while azmc.is_moving is True or elmc.is_moving is True:
                         print(" "*100, end="\r") #Blanking line 100 chars long
                         print("Current antenna position: AZ %s degrees [%s]\t--\tEL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
+                        #If we're at position we delay a little so the user can see movement has stopped
+                        if azmc.is_moving is False and elmc.is_moving is False:
+                            timercount += 1
+                        else:
+                            #Reset counter if we start moving again on any axis.
+                            timercount = 0
                         sleep(0.1)
+                    print("\n\nAt target position: AZ %s degrees [%s]\t--\tEL %s degrees [%s]\n" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick))
                 except KeyboardInterrupt:
                     print("\n")
                     continue
@@ -936,6 +927,8 @@ def terminal_interface(azmc, elmc):
                     continue
                 angle = float(angle)
                 #Should be mostly valid args now. We'll check ranges for each axis specifically.
+                #TODO Move most of the code in az out of it and just set the MAX_INPUT_ANGLE to be whatever is required
+                #The rest of the code is mostly agnostic, a few madlib changes in the prints is all.
                 if axis == "az":
                     if abs(angle) < MAX_AZ_INPUT_ANGLE:
                         print("WARNING! Manually adjusting the azimuth offset could lead to a situation where unwinding is ineffective at preventing catastrophic failure of the wiring harness!")
@@ -948,6 +941,7 @@ def terminal_interface(azmc, elmc):
                             yn = input("Changing azimuth angle from %s [%s] to %s [%s], are you sure you want to do this? (Y/N): ").lower()
                         if yn == "y":
                             print("Ok updating azimuth angle to %s degrees (tick number %s)...")
+                            #TODO UPDATE HERE
                         else:
                             print("Canceling offset update...")
                             continue
@@ -960,6 +954,7 @@ def terminal_interface(azmc, elmc):
             elif command == "d":
                 print("Current commanded angles (AZ, EL): (%s, %s)" % (azmc.commanded_angle, elmc.commanded_angle))
                 print("Motor movement status (AZ, EL): (%s, %s)" % (str(azmc.is_moving), str(elmc.is_moving)))
+                print("E-Stop Status: AZ:%s  - EL:%s" % (str(azmc.stop_movement), str(elmc.stop_movement)))
 
             elif command == "v" or command == "version":
                 print("Antenna Control version %s" % _VERSION_)
@@ -1043,6 +1038,11 @@ def terminal_interface(azmc, elmc):
                             sleep(1)
                         print("")
                         print("Starting track on %s!" % satname)
+                        #TODO Start satdump command line for automatically reception of images! Think I have it figured out, should be easy.
+                        #Example command lines for NOAA 18 and Meteor-M2 HRPT
+                        # satdump live noaa_hrpt OUTPUT_FOLDER --source rtlsdr --samplerate 2.4e6 --frequency 1707.0e6 --gain 49 --http_server 0.0.0.0:8080
+                        # satdump live meteor_hrpt OUTPUT_FOLDER --source rtlsdr --samplerate 2.4e6 --frequency 1700.0e6 --gain 49 --http_server 0.0.0.0:8080
+                        #The http server allows realtime feedback of progress and signal strength, we could incorporate that data into our output.
                         stoptimelocaltz = passdata[1].astimezone()
                         seconds_until_stop = 2
                         while seconds_until_stop > 1:
@@ -1196,7 +1196,7 @@ class SatFinder:
             #Check age
             curtime = time()
             filemodtime = int(os.stat("weather.txt").st_mtime)
-            if curtime - filemodtime > 3 * 24 * 60 * 60: # 3 days
+            if curtime - filemodtime > TLE_UPDATE_FREQ_DAYS * 24 * 60 * 60: # 3 days
                 print("Updating weather.txt TLE file...")
                 urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", "weather.txt")
                 self.updatesatnames()
