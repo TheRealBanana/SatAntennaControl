@@ -1,4 +1,4 @@
-_VERSION_ = "0.66"
+_VERSION_ = "0.67"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -64,7 +64,6 @@ MAX_AZ_INPUT_ANGLE = 370
 MAX_EL_INPUT_ANGLE = 180 #Elevation axis can actually go slightly below 0 or 180 but its not needed
 PWM_FREQUENCY = 2000
 SLOWDOWN_DEGREES = 3 #Slow down when within this many degrees of target
-SLOWDOWN_PCT = 0.25 #Percent of normal speed to slow to
 
 #Roughly how many degrees rotation for each tick. Some maths behind this, don't mess with it if you don't know what you're doing.
 # Ring gear is 58 tooth and encoder gear is 10 tooth, so 5.8:1.
@@ -383,13 +382,13 @@ class ElMotorControl(threading.Thread):
                 #How a dummy implements the P in PID
                 #Slow down when we are close. Say 25% speed when within 5 degrees?
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES:
-                    self.EL_motor_PWM_out.ChangeDutyCycle(speed*SLOWDOWN_PCT)
+                    self.EL_motor_PWM_out.ChangeDutyCycle(30)
                 #Slowdown again when we are SLOWDOWN_DEGREES/2 degrees away
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES/2:
-                    self.EL_motor_PWM_out.ChangeDutyCycle(speed*SLOWDOWN_PCT*SLOWDOWN_PCT)
+                    self.EL_motor_PWM_out.ChangeDutyCycle(20)
                 #Last slowdown for super fine movements
                 if anglesign * (angle - self.encoder.curangle) < 1:
-                    self.EL_motor_PWM_out.ChangeDutyCycle(speed*SLOWDOWN_PCT*SLOWDOWN_PCT*SLOWDOWN_PCT)
+                    self.EL_motor_PWM_out.ChangeDutyCycle(10)
 
                 curtime = time()
                 if curtime - lasttime > angle_every_seconds:
@@ -553,13 +552,13 @@ class AzMotorControl(threading.Thread):
         if anglediff > 5:
             pass # no slowdown, 100 duty cycle
         elif anglediff > 2: # Between 5 and 2 degrees, first slowdown
-            movespeed *= SLOWDOWN_PCT
+            movespeed = 30 # Should be 25% here
         elif anglediff > 1: #Between 1 and 2 degrees, second slowdown
-            movespeed *= SLOWDOWN_PCT**2
+            movespeed = 15 #Should be 6.25%
         elif anglediff >= self.encoder.ANGLE_TICK*3: #between a degree difference and 3 ANGLE_TICKs
-            movespeed *= SLOWDOWN_PCT**3 # Duty cycle of 1.5625%
+            movespeed = 8
         else: # Between 3 ticks and our target we really crawl slowly
-            movespeed = 0.1 #Slowest move speed possible
+            movespeed = 5 #Slowest move speed possible
 
         #Ok now we know what motor to activate and how fast it should move.
         movefun(movespeed)
@@ -667,13 +666,13 @@ class AzMotorControl(threading.Thread):
                 #How a dummy implements the P in PID
                 #Slow down when we are close. Say 25% speed when within 5 degrees?
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES:
-                    self.AZ_motor_PWM_out.ChangeDutyCycle(speed*SLOWDOWN_PCT)
+                    self.AZ_motor_PWM_out.ChangeDutyCycle(30)
                 #Slowdown again when we are SLOWDOWN_DEGREES/2 degrees away
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES/2:
-                    self.AZ_motor_PWM_out.ChangeDutyCycle(speed*SLOWDOWN_PCT*SLOWDOWN_PCT)
+                    self.AZ_motor_PWM_out.ChangeDutyCycle(15)
                 #Last slowdown for super fine movements
                 if anglesign * (angle - self.encoder.curangle) < 1:
-                    self.AZ_motor_PWM_out.ChangeDutyCycle(speed*SLOWDOWN_PCT*SLOWDOWN_PCT*SLOWDOWN_PCT)
+                    self.AZ_motor_PWM_out.ChangeDutyCycle(8)
 
                 curtime = time()
                 if curtime - lasttime > angle_every_seconds:
