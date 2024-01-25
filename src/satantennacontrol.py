@@ -1,4 +1,4 @@
-_VERSION_ = "0.67"
+_VERSION_ = "0.68"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -470,6 +470,7 @@ class AzMotorControl(threading.Thread):
         self.stop_movement = False
         self.speed = 100
         self.is_moving = False
+        self.manual_offset_diff = 0 # Track our manual azimuth offset difference so we can park properly
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_command_angle() loop
     def run(self):
@@ -602,9 +603,9 @@ class AzMotorControl(threading.Thread):
         #Now move to home the proper way and we're done
         print("\nUnwound mast, now parking at home position...")
         self.stop_motor()
-        self.move_to_angle(0)
-        #Reset commanded angle to 0 and resume follower function
-        self.commanded_angle = 0
+        self.move_to_angle(AZ_PARK_ANGLE + self.manual_offset_diff)
+        #Reset commanded angle to our park angle and resume follower function
+        self.commanded_angle = AZ_PARK_ANGLE + self.manual_offset_diff
         self.stop_movement = False
 
     def stop_motor(self):
@@ -697,6 +698,7 @@ class AzMotorControl(threading.Thread):
         print("Final angle: %s degrees [%s]" % (self.encoder.getCurrentAngle(), self.encoder.getCurrentTick()))
 
     def find_home(self):
+        print("Finding home for the azimuth axis. Be aware this will reset any axis offset you have set.")
         self.homed = False
         #Rough home at high speed
         self.move_until_stop() # Under the hood this always moves motor direction 2, so to go backwards we go dir1
@@ -914,41 +916,33 @@ def terminal_interface(azmc, elmc):
             #You point the antenna at the strongest spot and then use this command to tell the program its current
             #azimuth is the exact azimuth of GOES. Same as manually calibrating azimuth but in software. We could even
             #save the offset to file and load it again.
-            elif command == "setoffset":
-                args2 = args.split(" ")
-                if len(args2) != 2:
-                    print("Invalid number of arguments. First argument is axis, second is angle value. E.g. az 211.8")
+            elif command == "setazoffset":
+                if args.count(".") > 1 or args.replace(".", "").isnumeric() is False:
+                    print("Invalid argument, must be an int or float. E.g. setazoffset 211.8")
                     continue
-                axis = args2[0]
-                angle = args2[1]
-                if angle.count(".") > 1 or angle.replace(".", "").isnumeric() is False:
-                    print("Invalid second argument, must be an int or float. E.g. az 211.8")
+                angle = float(args)
+                if abs(angle - azmc.encoder.curangle) > 5:
+                    print("For safety, azimuth adjustments of more than 5 degrees are not allowed. If your mast is off by that much you need to manually realign it. This function is for fine adjustment only.")
                     continue
-                angle = float(angle)
-                #Should be mostly valid args now. We'll check ranges for each axis specifically.
-                #TODO Move most of the code in az out of it and just set the MAX_INPUT_ANGLE to be whatever is required
-                #The rest of the code is mostly agnostic, a few madlib changes in the prints is all.
-                if axis == "az":
-                    if abs(angle) < MAX_AZ_INPUT_ANGLE:
-                        print("WARNING! Manually adjusting the azimuth offset could lead to a situation where unwinding is ineffective at preventing catastrophic failure of the wiring harness!")
-                        if abs(angle - azmc.encoder.curangle) > 5:
-                            print("For safety, adjustments of more than 5 degrees are not allowed. If your mast is off by that much you need to manually realign it. This function is for fine adjustment only.")
-                            continue
-                        yn = '.'
-                        while yn not in "yn":
-                            #TODO DETERMINE WHAT TICK NUMBER
-                            yn = input("Changing azimuth angle from %s [%s] to %s [%s], are you sure you want to do this? (Y/N): ").lower()
-                        if yn == "y":
-                            print("Ok updating azimuth angle to %s degrees (tick number %s)...")
-                            #TODO UPDATE HERE
-                        else:
-                            print("Canceling offset update...")
-                            continue
-                elif axis == "el":
-                    pass
-                else:
-                    print("You must pass either az or el before the updated angle. E.g. az 211.8")
 
+                if abs(angle) > MAX_AZ_INPUT_ANGLE:
+                    print("Input angle is outside of allowable range for the azimuth axis. Entered value: %s (MAX %s)" % (str(angle), str(MAX_AZ_INPUT_ANGLE)))
+                    continue
+                #Should be valid angle adjustment now (hopefully)
+                yn = '.'
+                while yn not in "yn":
+                    #Not changing the tick number here since we need that to unwind without crashing.
+                    #Tick is only used to unwind and angle is only reset on home, so just an angle offset should work for everything.
+                    offset_diff = angle - azmc.encoder.curangle
+                    yn = input("Changing azimuth angle from %s to %s (Diff: %s), are you sure you want to do this? (Y/N): " % (round(azmc.encoder.curangle, 3), angle, offset_diff)).lower()
+                    if yn == "y":
+                        print("Ok updating azimuth angle to %s degrees..." % angle)
+                        azmc.manual_offset_diff += offset_diff # Should track multiple different offsets properly
+                        azmc.encoder.curangle = angle
+                        azmc.commanded_angle = angle
+                    else:
+                        print("Canceling offset update...")
+                        continue
 
             elif command == "d":
                 print("Current commanded angles (AZ, EL): (%s, %s)" % (azmc.commanded_angle, elmc.commanded_angle))
@@ -964,7 +958,7 @@ def terminal_interface(azmc, elmc):
             #Support input of timeframe directly after command and before sat name
             # e.g. passlist 48 meteor-m2 2
             # would give passes for the next 48 hours for meteor-m2 2
-            # No number there would default to 24h
+            # No number there would default to 24h  
             elif command == "passlist": # Generate a 24 hour passlist for a specific satellite
                 #Check for time limit. None of the satellites start with a number so this should be reliable.
                 argsplit = re.split(" ", args)
@@ -1068,7 +1062,7 @@ def terminal_interface(azmc, elmc):
                 finally:
                     azmc.unwind_mast()
                     #AAAAnd now park
-                    azmc.commanded_angle = AZ_PARK_ANGLE
+                    azmc.commanded_angle = AZ_PARK_ANGLE + azmc.manual_offset_diff #Account for any offset we have
                     elmc.commanded_angle = EL_PARK_ANGLE
                     inp = "BYPASS"
                     command = "watch"
