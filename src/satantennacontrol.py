@@ -1,4 +1,4 @@
-_VERSION_ = "0.68"
+_VERSION_ = "0.69"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -11,7 +11,7 @@ from urllib.request import urlretrieve
 from pyorbital import orbital
 import threading, re, os, os.path, pytz
 from difflib import SequenceMatcher
-from json import loads as json_loads
+from json import load as json_load
 from json.decoder import JSONDecodeError
 
 #NEEDED FOR SATELLITE TRACKING!
@@ -105,6 +105,10 @@ SATNAME_MATCH_RATIO = 0.89
 
 #How many days between updating TLE data?
 TLE_UPDATE_FREQ_DAYS = 3
+
+#Name of the file to be used for position recovery data. Prefix it with a period to hide it in linux.
+POSITION_RECOVERY_FILE_NAME = ".active_position"
+
 
 class RotaryEncoder:
     CLOCKWISE=1
@@ -214,7 +218,7 @@ class ElMotorControl(threading.Thread):
             self.calhome()
             print("\n\n")
         else:
-            print("Bypassing homing and using recovery data on the elevation axis.")
+            print("Bypassing homing and using recovery data on the elevation axis. Pos: %s [%s]" % (self.recovery_data["ElevationDeg"], self.recovery_data["ElevationTick"]))
             self.encoder.curangle = self.recovery_data["ElevationDeg"]
             self.commanded_angle = self.encoder.curangle
             self.encoder.curtick = self.recovery_data["ElevationTick"]
@@ -479,7 +483,7 @@ class AzMotorControl(threading.Thread):
             self.find_home()
             print("\n\n")
         else:
-            print("Bypassing homing and using recovery data on the azimuth axis.")
+            print("Bypassing homing and using recovery data on the azimuth axis. Pos: %s [%s]" % (self.recovery_data["AzimuthDeg"], self.recovery_data["AzimuthTick"]))
             self.encoder.curangle = self.recovery_data["AzimuthDeg"]
             self.commanded_angle = self.encoder.curangle
             self.encoder.curtick = self.recovery_data["AzimuthTick"]
@@ -948,9 +952,10 @@ def terminal_interface(azmc, elmc):
                 print("Current commanded angles (AZ, EL): (%s, %s)" % (azmc.commanded_angle, elmc.commanded_angle))
                 print("Motor movement status (AZ, EL): (%s, %s)" % (str(azmc.is_moving), str(elmc.is_moving)))
                 print("E-Stop Status: AZ:%s  - EL:%s" % (str(azmc.stop_movement), str(elmc.stop_movement)))
+                print("Manual azimuth offset: %s degrees" % azmc.manual_offset_diff)
 
             elif command == "v" or command == "version":
-                print("Antenna Control version %s" % _VERSION_)
+                print("Satellite Antenna Control version %s" % _VERSION_)
 
             elif command == "satlist":
                 satfind.satlist()
@@ -1217,26 +1222,25 @@ def create_time_string(seconds_total):
 def check_for_recovery_data():
     posdata = None
     recovery_data = None
-    if os.access("./.active_position", os.F_OK):
+    if os.access(POSITION_RECOVERY_FILE_NAME, os.F_OK):
         print("Found active position data file, checking...")
-        with open("./.active_position") as saved_position_file:
+        with open(POSITION_RECOVERY_FILE_NAME) as saved_position_file:
             # Example line:
             # { "AzimuthDeg": 211.813, "AzimuthTick": -955, "ElevationDeg": 45.58, "ElevationTick": 253, "Is_Moving": false }
             try:
-                posline = saved_position_file.readline()
-                posdata = json_loads(posline)
+                posdata = json_load(saved_position_file)
             except JSONDecodeError:
-                print("Couldn't recover position data from file. Failed to load this line: ")
-                print(posline)
+                print("Couldn't recover position data from file.")
                 print("If you think the azimuth axis is currently wound up you may want to cancel running this program and manually unwind it to prevent any damage.")
-
+    else:
+        print("No recovery file found. Skipping...")
+        return None
     # At this point the variable posdata is either None or has something in it
     # First we need to verify that ALL the data is present that we need.
     if posdata is not None:
         needed_keys = ["AzimuthDeg", "AzimuthTick", "ElevationDeg", "ElevationTick", "Is_Moving"]
         actual_keys = list(posdata.keys())
-        actual_keys.sort()
-        if needed_keys == actual_keys:
+        if all(k in actual_keys for k in needed_keys):
             #Keys are valid, now lets check if the values are valid, they should all be floats or ints and the last a bool
             ismoving = posdata.pop("Is_Moving")
             if all([isinstance(t, (int, float)) for t in posdata.values()]):
@@ -1245,7 +1249,7 @@ def check_for_recovery_data():
                 #TODO Should probably check values ranges here too but im lazy and just want this working now
                 #all the recovery data is hand-written at first anyway since theres no saving functions.
                 print("Recovery data passed basic checks. Here's what we got:\n")
-                print(posdata)
+                for k,v in posdata.items(): print("%s:\t%s" % (k,v))
                 print("\n")
                 goodyn = '.'
                 while goodyn not in "yn":
