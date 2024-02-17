@@ -1,4 +1,4 @@
-_VERSION_ = "0.69"
+_VERSION_ = "0.70"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -1001,6 +1001,7 @@ def terminal_interface(azmc, elmc):
                         print("Canceling track selection.")
                         continue
                     passdata = passes[int(selectedpass)]
+                    passduration = (passdata[1] - passdata[0]).total_seconds()
                     starttimelocaltz = passdata[0].astimezone()
                     nicestarttime = starttimelocaltz.strftime("%Y-%m-%d %H:%M:%S")
                     starttime = starttimelocaltz - datetime.now().astimezone()
@@ -1023,16 +1024,17 @@ def terminal_interface(azmc, elmc):
                         #Track movement until we're about 1 degree away then go into wait mode
                         while abs(azmc.commanded_angle - azmc.encoder.curangle) > 1 or abs(elmc.commanded_angle - elmc.encoder.curangle) > 1:
                             print(" "*100, end="\r") #Blanking line 100 chars long
-                            print("Current antenna position: AZ %s degrees [%s] -- EL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
+                            print("Current antenna position: AZ %s degrees [%s]\t--\tEL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
                             sleep(0.1)
                         print("")
+                        startimetext = create_time_string((starttimelocaltz - datetime.now().astimezone()).total_seconds())
                         print("Parked at starting position, now waiting for the pass to start. Start time is %s (%s)." % (nicestarttime, startimetext))
                         seconds_until_start = 2
                         while seconds_until_start > 1:
                             seconds_until_start = (starttimelocaltz - datetime.now().astimezone()).total_seconds()
                             timetostarttext = create_time_string(seconds_until_start)
                             print(" "*100, end="\r")
-                            print("Waiting for %s, starting at %s (%s)..." % (satname, nicestarttime, timetostarttext), end="\r")
+                            print("Waiting for %s, starting at %s (ETA %s)..." % (satname, nicestarttime, timetostarttext), end="\r")
                             sleep(1)
                         print("")
                         print("Starting track on %s!" % satname)
@@ -1051,10 +1053,11 @@ def terminal_interface(azmc, elmc):
                             azmc.commanded_angle = sataz
                             elmc.commanded_angle = satel
                             timeleftstr = create_time_string(seconds_until_stop)
+                            timeleftpct = round(seconds_until_stop/passduration)*100
                             #Clearing more than the current width of the screen causes a \n to be printed
                             #But we dont want to underclear either. Just take the length of the current message and add 10.
                             #It probably hasnt changed THAT much from one second ago.
-                            printmsg = "Tracking %s at Az%s El%s - %s - Current antenna position: Az%s El%s" % (satname, round(sataz, 3), round(satel, 3), timeleftstr, round(azmc.encoder.curangle, 3), round(elmc.encoder.curangle, 3))
+                            printmsg = "Tracking %s at Az%s El%s - %s%% %s\t-\tCurrent antenna position: Az%s El%s" % (satname, round(sataz, 3), round(satel, 3), timeleftpct, timeleftstr, round(azmc.encoder.curangle, 3), round(elmc.encoder.curangle, 3))
                             print(" "*(len(printmsg)+10), end="\r")
                             print(printmsg, end="\r")
                             sleep(0.05) #Update 50 times a second. Might need more.
@@ -1210,13 +1213,17 @@ def create_time_string(seconds_total):
     seconds = int(seconds_total%(60*60*24)%(60*60)%60)
     timestring = ""
     if days > 0:
-        timestring += "%s days " % days
+        timestring += "%s day " % days
+        if days > 1: timestring = timestring[:-1] + "s" + timestring[-1:]
     if hours > 0:
-        timestring += "%s hours " % hours
+        timestring += "%s hour " % hours
+        if hours > 1: timestring = timestring[:-1] + "s" + timestring[-1:]
     if minutes > 0:
-        timestring += "%s minutes " % minutes
+        timestring += "%s minute " % minutes
+        if minutes > 1: timestring = timestring[:-1] + "s" + timestring[-1:]
     if seconds > 0:
-        timestring += "%s seconds" % seconds
+        timestring += "%s second" % seconds
+        if seconds > 1: timestring += "s"
     return timestring
 
 def check_for_recovery_data():
