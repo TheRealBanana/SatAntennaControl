@@ -1,4 +1,4 @@
-_VERSION_ = "0.70"
+_VERSION_ = "0.71"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -106,8 +106,13 @@ SATNAME_MATCH_RATIO = 0.89
 #How many days between updating TLE data?
 TLE_UPDATE_FREQ_DAYS = 3
 
+
+RUNFOLDER = "/mnt/SatStationData/SatAntennaControl/src"
+#Path doesnt work because its using the symlink's folder instead of the actual folder
+TLEFILEPATH = os.path.join(RUNFOLDER, "weather.txt")
+
 #Name of the file to be used for position recovery data. Prefix it with a period to hide it in linux.
-POSITION_RECOVERY_FILE_NAME = ".active_position"
+POSITION_RECOVERY_FILE_PATH = os.path.join(RUNFOLDER, ".active_position")
 
 
 class RotaryEncoder:
@@ -896,7 +901,7 @@ def terminal_interface(azmc, elmc):
                     while timercount < pausedelay/0.1:
                     #while azmc.is_moving is True or elmc.is_moving is True:
                         print(" "*100, end="\r") #Blanking line 100 chars long
-                        print("Current antenna position: AZ %s degrees [%s]\t--\tEL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
+                        print("Current antenna position: AZ %s degrees [%s] --\tEL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
                         #If we're at position we delay a little so the user can see movement has stopped
                         if azmc.is_moving is False and elmc.is_moving is False:
                             timercount += 1
@@ -904,7 +909,7 @@ def terminal_interface(azmc, elmc):
                             #Reset counter if we start moving again on any axis.
                             timercount = 0
                         sleep(0.1)
-                    print("\n\nAt target position: AZ %s degrees [%s]\t--\tEL %s degrees [%s]\n" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick))
+                    print("\n\nAt target position: AZ %s degrees [%s]--\tEL %s degrees [%s]\n" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick))
                 except KeyboardInterrupt:
                     print("\n")
                     continue
@@ -1024,7 +1029,7 @@ def terminal_interface(azmc, elmc):
                         #Track movement until we're about 1 degree away then go into wait mode
                         while abs(azmc.commanded_angle - azmc.encoder.curangle) > 1 or abs(elmc.commanded_angle - elmc.encoder.curangle) > 1:
                             print(" "*100, end="\r") #Blanking line 100 chars long
-                            print("Current antenna position: AZ %s degrees [%s]\t--\tEL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
+                            print("Current antenna position: AZ %s degrees [%s] --\tEL %s degrees [%s]" % (round(azmc.encoder.curangle, 3), azmc.encoder.curtick, round(elmc.encoder.curangle, 3), elmc.encoder.curtick), end="\r")
                             sleep(0.1)
                         print("")
                         startimetext = create_time_string((starttimelocaltz - datetime.now().astimezone()).total_seconds())
@@ -1053,11 +1058,12 @@ def terminal_interface(azmc, elmc):
                             azmc.commanded_angle = sataz
                             elmc.commanded_angle = satel
                             timeleftstr = create_time_string(seconds_until_stop)
-                            timeleftpct = round(seconds_until_stop/passduration)*100
+                            invtimeleft = passduration - seconds_until_stop
+                            timeleftpct = round((invtimeleft/passduration)*100)
                             #Clearing more than the current width of the screen causes a \n to be printed
                             #But we dont want to underclear either. Just take the length of the current message and add 10.
                             #It probably hasnt changed THAT much from one second ago.
-                            printmsg = "Tracking %s at Az%s El%s - %s%% %s\t-\tCurrent antenna position: Az%s El%s" % (satname, round(sataz, 3), round(satel, 3), timeleftpct, timeleftstr, round(azmc.encoder.curangle, 3), round(elmc.encoder.curangle, 3))
+                            printmsg = "Tracking %s at Az%s El%s - %s%% %s -\tCurrent antenna position: Az%s El%s" % (satname, round(sataz, 3), round(satel, 3), timeleftpct, timeleftstr, round(azmc.encoder.curangle, 3), round(elmc.encoder.curangle, 3))
                             print(" "*(len(printmsg)+10), end="\r")
                             print(printmsg, end="\r")
                             sleep(0.05) #Update 50 times a second. Might need more.
@@ -1152,7 +1158,7 @@ class SatFinder:
     def getsatparams(self, satname):
         #Check if the satellite exists
         try:
-            satparams = orbital.Orbital(satname, tle_file="weather.txt")
+            satparams = orbital.Orbital(satname, tle_file=TLEFILEPATH)
         except KeyError:
             closenamecheck = self.findclosestsatname(satname)
             if isinstance(closenamecheck, list):
@@ -1160,7 +1166,7 @@ class SatFinder:
                 return None
             else:
                 print("Returning results for '%s' as '%s' wasn't found in the satellite list." % (closenamecheck, satname))
-                satparams = orbital.Orbital(closenamecheck, tle_file="weather.txt")
+                satparams = orbital.Orbital(closenamecheck, tle_file=TLEFILEPATH)
         except NotImplementedError:
             print("Pyorbital doesn't yet support calculations for geostationary satellites. There are alternative libraries that I have yet to try that may support them.")
             return None
@@ -1181,7 +1187,7 @@ class SatFinder:
     def updatesatnames(self):
         print("Updating list of satellites names...")
         self.satnames = []
-        with open("weather.txt", "r") as tlefile:
+        with open(TLEFILEPATH, "r") as tlefile:
             line = tlefile.readline()
             while line != '':
                 if line[0].isdigit() is False:
@@ -1191,19 +1197,20 @@ class SatFinder:
 
 
     def updatetle(self):
+        print("Starting TLE update...")
         #Check if we have an updated TLE file for weather satellites, if not grab a fresh one.
         #It should be in the same dir this file
-        if os.access("weather.txt", os.F_OK) is True:
+        if os.access(TLEFILEPATH, os.F_OK) is True:
             #Check age
             curtime = time()
-            filemodtime = int(os.stat("weather.txt").st_mtime)
+            filemodtime = int(os.stat(TLEFILEPATH).st_mtime)
             if curtime - filemodtime > TLE_UPDATE_FREQ_DAYS * 24 * 60 * 60: # 3 days
                 print("Updating weather.txt TLE file...")
-                urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", "weather.txt")
+                urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", TLEFILEPATH)
                 self.updatesatnames()
         else:
             print("Downloading weather.txt TLE file...")
-            urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", "weather.txt")
+            urlretrieve("http://celestrak.org/NORAD/elements/weather.txt", TLEFILEPATH)
             self.updatesatnames()
 
 def create_time_string(seconds_total):
@@ -1229,9 +1236,9 @@ def create_time_string(seconds_total):
 def check_for_recovery_data():
     posdata = None
     recovery_data = None
-    if os.access(POSITION_RECOVERY_FILE_NAME, os.F_OK):
+    if os.access(POSITION_RECOVERY_FILE_PATH, os.F_OK):
         print("Found active position data file, checking...")
-        with open(POSITION_RECOVERY_FILE_NAME) as saved_position_file:
+        with open(POSITION_RECOVERY_FILE_PATH) as saved_position_file:
             # Example line:
             # { "AzimuthDeg": 211.813, "AzimuthTick": -955, "ElevationDeg": 45.58, "ElevationTick": 253, "Is_Moving": false }
             try:
