@@ -1214,10 +1214,10 @@ class SatFinder:
             self.updatesatnames()
 
 def create_time_string(seconds_total):
-    days = int(seconds_total/(60*60*24))
-    hours = int(seconds_total%(60*60*24)/(60*60))
-    minutes = int(seconds_total%(60*60*24)%(60*60)/60)
-    seconds = int(seconds_total%(60*60*24)%(60*60)%60)
+    days = int(seconds_total/86400)
+    hours = int((seconds_total%86400)/3600)
+    minutes = int((seconds_total%86400%3600)/60)
+    seconds = int(seconds_total%86400%3600%60)
     timestring = ""
     if days > 0:
         timestring += "%s day " % days
@@ -1231,6 +1231,7 @@ def create_time_string(seconds_total):
     if seconds > 0:
         timestring += "%s second" % seconds
         if seconds > 1: timestring += "s"
+    timestring = timestring.strip()
     return timestring
 
 def check_for_recovery_data():
