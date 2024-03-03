@@ -1,4 +1,4 @@
-_VERSION_ = "0.71"
+_VERSION_ = "0.72"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -724,6 +724,7 @@ class AzMotorControl(threading.Thread):
         #Reset encoder position for the final time, should be an accurate and repeatable zero.
         self.encoder.reset_position()
         self.commanded_angle = self.encoder.curangle
+        self.manual_offset_diff = 0
         self.homed = True
 
 def loadgpscoords():
