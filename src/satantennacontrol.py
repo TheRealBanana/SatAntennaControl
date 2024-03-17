@@ -110,7 +110,7 @@ TLE_UPDATE_FREQ_DAYS = 3
 RUNFOLDER = "/mnt/SatStationData/SatAntennaControl/src"
 #Path doesnt work because its using the symlink's folder instead of the actual folder
 TLEFILEPATH = os.path.join(RUNFOLDER, "weather.txt")
-
+GPSFILEPATH = os.path.join(RUNFOLDER, "gpscoords.txt")
 #Name of the file to be used for position recovery data. Prefix it with a period to hide it in linux.
 POSITION_RECOVERY_FILE_PATH = os.path.join(RUNFOLDER, ".active_position")
 
@@ -734,9 +734,9 @@ def loadgpscoords():
     #Group 1 = LAT, LONG, or ALT
     #Group 2 = float
 
-    if os.access("gpscoords.txt", os.F_OK):
+    if os.access(GPSFILEPATH, os.F_OK):
         print("Found gpscoords.txt file, loading...")
-        with open("gpscoords.txt", "r") as coordsfile:
+        with open(GPSFILEPATH, "r") as coordsfile:
             line = '.'
             while line != "":
                 line = coordsfile.readline()
