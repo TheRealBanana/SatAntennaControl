@@ -1,4 +1,4 @@
-_VERSION_ = "0.72"
+_VERSION_ = "0.73"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -1091,6 +1091,10 @@ def terminal_interface(azmc, elmc):
 class SatFinder:
     def __init__(self):
         self.satnames = []
+        #Updatetle only calls updatesatnames() when it grabs a new TLE file. No reason to always update the satnamelist
+        #even if we don't download a new TLE file. It could possibly double call if we have to download a new TLE but
+        #im ok with that, it only happens once at start anyway.
+        self.updatesatnames()
         self.updatetle()
 
     def satlist(self):
@@ -1186,6 +1190,9 @@ class SatFinder:
         return [None, highestmatch[0]]
 
     def updatesatnames(self):
+        if os.access(TLEFILEPATH, os.F_OK) is False:
+            print("No TLE file found for updatestanames().")
+            return
         print("Updating list of satellites names...")
         self.satnames = []
         with open(TLEFILEPATH, "r") as tlefile:
@@ -1284,6 +1291,8 @@ def check_for_recovery_data():
     return recovery_data
 
 def main():
+    if os.access(RUNFOLDER, os.F_OK) is False:
+        raise(Exception("Couldn't access the RUNFOLDER directory: '%s' - Quitting..." % RUNFOLDER))
     print("Welcome to Satellite Antenna Control v%s!" % _VERSION_)
     sleep(2)
     print("Setting up board and homing axes...")
