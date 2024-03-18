@@ -1,4 +1,4 @@
-_VERSION_ = "0.73"
+_VERSION_ = "0.74"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -97,7 +97,7 @@ AZ_PARK_ANGLE = 0 # Park azimuth at 0 (which should be due north)
 #Because i'm too lazy to implement the full PID control I have to deal with low elevation issues.
 #Gravity pulls the dish down harder against the motors the lower its elevation, so below a certain critical angle
 #we have to increase our PWM constants to compensate. Seems like around 10-20 degrees we start tracking normally again.
-ELEVATION_CRIT_ANGLE = 20
+ELEVATION_CRIT_ANGLE = 50
 ELEVATION_CRIT_MULTI = 1.5 # How much do we increase by?
 
 #Trying to find a ratio so I don't need to remember the exact way to specify meteor-m2 3
@@ -301,17 +301,19 @@ class ElMotorControl(threading.Thread):
         if anglediff > 5:
             pass # no slowdown, 100 duty cycle
         elif anglediff > 2: # Between 5 and 2 degrees, first slowdown
-            movespeed = 40
+            movespeed = 45
         elif anglediff > 1: #Between 1 and 2 degrees, second slowdown
-            movespeed = 30
+            movespeed = 35
         elif anglediff >= self.encoder.ANGLE_TICK*3: #between a degree difference and 3 ANGLE_TICKs
-            movespeed = 20
+            movespeed = 25
         else: # Between 3 ticks and our target we really crawl slowly
-            movespeed = 14 #Slowest move speed possible cant move the elevation axis from 0 or 180
+            movespeed = 20 #Slowest move speed possible cant move the elevation axis from 0 or 180
 
         #Small movements at low elevations are hard to do with normal PWM constants, so we buff them up a bit to help.
         if self.encoder.curangle < ELEVATION_CRIT_ANGLE and anglediff < 5:
             movespeed = round(movespeed * ELEVATION_CRIT_MULTI)
+        elif self.encoder.curangle > 80 and anglediff < 5:
+            movespeed = round(movespeed * 0.5)
 
         #Ok now we know what motor to activate and how fast it should move.
         movefun(movespeed)
@@ -391,13 +393,13 @@ class ElMotorControl(threading.Thread):
                 #How a dummy implements the P in PID
                 #Slow down when we are close. Say 25% speed when within 5 degrees?
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES:
-                    self.EL_motor_PWM_out.ChangeDutyCycle(30)
+                    self.EL_motor_PWM_out.ChangeDutyCycle(50)
                 #Slowdown again when we are SLOWDOWN_DEGREES/2 degrees away
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES/2:
-                    self.EL_motor_PWM_out.ChangeDutyCycle(20)
+                    self.EL_motor_PWM_out.ChangeDutyCycle(30)
                 #Last slowdown for super fine movements
                 if anglesign * (angle - self.encoder.curangle) < 1:
-                    self.EL_motor_PWM_out.ChangeDutyCycle(10)
+                    self.EL_motor_PWM_out.ChangeDutyCycle(25)
 
                 curtime = time()
                 if curtime - lasttime > angle_every_seconds:
