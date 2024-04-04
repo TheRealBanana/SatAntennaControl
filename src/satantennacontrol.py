@@ -60,7 +60,7 @@ EL_POS_OUTB = 1
 
 # Max allowed input angle. Ideally we would use hard endstops wired to the motor controler to save us from overrun
 # Without that, maybe this will save us.
-MAX_AZ_INPUT_ANGLE = 370
+MAX_AZ_INPUT_ANGLE = 360
 MAX_EL_INPUT_ANGLE = 180 #Elevation axis can actually go slightly below 0 or 180 but its not needed
 PWM_FREQUENCY = 2000
 SLOWDOWN_DEGREES = 3 #Slow down when within this many degrees of target
@@ -366,7 +366,7 @@ class ElMotorControl(threading.Thread):
         print("\nHit the %s endstop on the elevation axis, stopping motor!" % nicename)
         self.stop_motor()
 
-    def move_to_angle(self, angle, speed=100):
+    def move_to_angle(self, angle, speed=100, bypspeedctrl=False):
         #This function simply runs the motor in the correct direction until the curangle of the encoder matches the supplied angle
         #Determine which way to turn the motor
         if angle < self.encoder.curangle:
@@ -393,13 +393,13 @@ class ElMotorControl(threading.Thread):
                 #How a dummy implements the P in PID
                 #Slow down when we are close. Say 25% speed when within 5 degrees?
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES:
-                    self.EL_motor_PWM_out.ChangeDutyCycle(50)
+                    if not bypspeedctrl: self.EL_motor_PWM_out.ChangeDutyCycle(50)
                 #Slowdown again when we are SLOWDOWN_DEGREES/2 degrees away
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES/2:
-                    self.EL_motor_PWM_out.ChangeDutyCycle(30)
+                    if not bypspeedctrl: self.EL_motor_PWM_out.ChangeDutyCycle(30)
                 #Last slowdown for super fine movements
                 if anglesign * (angle - self.encoder.curangle) < 1:
-                    self.EL_motor_PWM_out.ChangeDutyCycle(25)
+                    if not bypspeedctrl: self.EL_motor_PWM_out.ChangeDutyCycle(25)
 
                 curtime = time()
                 if curtime - lasttime > angle_every_seconds:
@@ -656,7 +656,7 @@ class AzMotorControl(threading.Thread):
         print("\nHit azimuth endstop, stopping motor!")
         self.stop_motor()
 
-    def move_to_angle(self, angle, speed=100):
+    def move_to_angle(self, angle, speed=100, bypspeedctrl=False):
         #This function simply runs the motor in the correct direction until the curangle of the encoder matches the supplied angle
         #Determine which way to turn the motor
         if angle > self.encoder.curangle:
@@ -678,13 +678,13 @@ class AzMotorControl(threading.Thread):
                 #How a dummy implements the P in PID
                 #Slow down when we are close. Say 25% speed when within 5 degrees?
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES:
-                    self.AZ_motor_PWM_out.ChangeDutyCycle(30)
+                    if not bypspeedctrl: self.AZ_motor_PWM_out.ChangeDutyCycle(30)
                 #Slowdown again when we are SLOWDOWN_DEGREES/2 degrees away
                 if anglesign * (angle - self.encoder.curangle) < SLOWDOWN_DEGREES/2:
-                    self.AZ_motor_PWM_out.ChangeDutyCycle(15)
+                    if not bypspeedctrl: self.AZ_motor_PWM_out.ChangeDutyCycle(15)
                 #Last slowdown for super fine movements
                 if anglesign * (angle - self.encoder.curangle) < 1:
-                    self.AZ_motor_PWM_out.ChangeDutyCycle(8)
+                    if not bypspeedctrl: self.AZ_motor_PWM_out.ChangeDutyCycle(8)
 
                 curtime = time()
                 if curtime - lasttime > angle_every_seconds:
@@ -806,9 +806,11 @@ def terminal_interface(azmc, elmc):
                 else:
                     print("Invalid argument, either 'az' or 'el' should be passed to this command.")
 
+            #I just realized this is a dumb command name. It doesn't pause anything, it permanently stops movement. There is no continue.
+            #Whereas the estop is actually a pause which can be continued at will. But epause just sounds dumb.
             #Pause movement, soft-stop
             #Currently we just set the commanded angle to whatever the angle currently is
-            elif command == "pause":
+            elif command == "estop":
                 if args == "az":
                     print("Pausing movement on the azimuth axis at %s degrees" % azmc.encoder.curangle)
                     azmc.commanded_angle = azmc.encoder.curangle
@@ -823,17 +825,66 @@ def terminal_interface(azmc, elmc):
                     print("Invalid argument, either 'az' or 'el' should be passed to this command.")
 
             #More of a hard-stop, just interrupt the command function loop
-            elif command == "estop":
+            elif command == "pause":
                 print("Commanded both axes to stop movement now...")
                 azmc.stop_movement = True
                 elmc.stop_movement = True
 
             #ONLY WAY TO RESUME FROM AN ESTOP BESIDES RESTARTING IS THIS COMMAND!
             #NO OTHER COMMANDS WILL WORK AFTER AN ESTOP UNTIL YOU DO THIS
-            elif command == "estart":
+            elif command == "resume":
                 print("Restarting movement for both axes...")
                 azmc.stop_movement = False
                 elmc.stop_movement = False
+
+
+            #Test go command, allows for testing different PWM constants live
+            #Was going to use the normal go command and add this into it but its different enough to needs its own thing
+            #It will only support one axis at a time
+            #Move command format:
+            #tgo az101.64 50
+            #That will move the azimuth to angle 101.64 and use the PWM constant 50 as its move speed
+            #Should allow me to dial in the exact constants needed to move the antenna at different angles
+            elif command == "tgo":
+                test_command = re.search("(az|el) ?([0-9]{1,3}(?:\.[0-9]{1,3})?) ([0-9]{1,2})", args)
+                if test_command is None:
+                    print("Incorrect command structure. Command format is tgo <az|el> <angle> <PWM_val>")
+                    continue
+                axis, angle, pwmval = test_command.groups()
+                #Now that we know what axis and angle, we can make sure those values are sane
+                if axis == "az":
+                    if abs(angle) > MAX_AZ_INPUT_ANGLE:
+                        print("Given azimuth angle is outside the allowable range (MAX +-%s). Not moving." % MAX_AZ_INPUT_ANGLE)
+                        continue
+                elif axis == "el":
+                    if not (0 <= angle <= MAX_EL_INPUT_ANGLE): # Dont allow movements below 0
+                        print("Given elevation angle is outside the allowble range (0-%s). Not moving." % MAX_EL_INPUT_ANGLE)
+                        continue
+                if not (0 <= pwmval <= 100):
+                    print("Given PWM value is outside the allowble range (0-100). Not moving.")
+                    continue
+
+                #At this point we should have a set of valid, sane values that we can use.
+                #I was going to check if we were wound up but eh, just be careful.
+                #This isn't a command I will use much, probably disable it after I know the correct vals.
+                #So I dont plan on doing anything dumb like moving over 100 degrees while the mast was wound up.
+                #Thats all to say, dont be dumb and it should be fine.
+
+                #To have full control over movement speed we have to disable the automatic angle tracking loop
+                #The interfaces are the same so we can cut some code out by using one access variable
+                if axis == "az":
+                    axis_obj = azmc
+                elif axis == "el":
+                    axis_obj = elmc
+
+                axis_obj.stop_movement = True
+                #Now with the follower loop disabled we just wait for move_to_angle() to return
+                axis_obj.move_to_angle(angle, pwmval, bypspeedctrl=True)
+                #Before we reenable we have to sync the commanded_angle and the current angle, otherwise
+                #it will start moving back to its old position when we enable movement again.
+                axis_obj.commanded_angle = axis_obj.encoder.curangle
+                axis_obj.stop_movement = False
+
 
             #Move command format:
             #go az101.64 el95
@@ -848,7 +899,7 @@ def terminal_interface(azmc, elmc):
                 azcommand = re.search("az ?([0-9]{1,3}(?:\.[0-9]{1,3})?)", args)
                 if azcommand is not None:
                     azangle = float(azcommand.group(1))
-                    if abs(azangle) < MAX_AZ_INPUT_ANGLE:
+                    if abs(azangle) <= MAX_AZ_INPUT_ANGLE:
                         aztick = round(azangle / azmc.encoder.ANGLE_TICK)
                         aztext = "azimuth axis to %s degrees [%s]" % (azangle, aztick)
                     else:
@@ -859,7 +910,7 @@ def terminal_interface(azmc, elmc):
                 elcommand = re.search("el ?([0-9]{1,3}(?:\.[0-9]{1,3})?)", args)
                 if elcommand is not None:
                     elangle = float(elcommand.group(1))
-                    if abs(elangle) < MAX_EL_INPUT_ANGLE:
+                    if 0 <= elangle <= MAX_EL_INPUT_ANGLE: # Dont allow movements below 0
                         eltick = round(elangle / elmc.encoder.ANGLE_TICK)
                         eltext = "elevation axis to %s degrees [%s]" % (elangle, eltick)
                     else:
