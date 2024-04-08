@@ -1,4 +1,4 @@
-_VERSION_ = "0.75"
+_VERSION_ = "0.76"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -13,6 +13,7 @@ import threading, re, os, os.path, pytz
 from difflib import SequenceMatcher
 from json import load as json_load
 from json.decoder import JSONDecodeError
+from math import cos, sin, radians
 
 #NEEDED FOR SATELLITE TRACKING!
 
@@ -94,11 +95,6 @@ EL_ANGLE_TICK = 0.18
 EL_PARK_ANGLE = 90 # Straight up and down
 AZ_PARK_ANGLE = 0 # Park azimuth at 0 (which should be due north)
 
-#Because i'm too lazy to implement the full PID control I have to deal with low elevation issues.
-#Gravity pulls the dish down harder against the motors the lower its elevation, so below a certain critical angle
-#we have to increase our PWM constants to compensate. Seems like around 10-20 degrees we start tracking normally again.
-ELEVATION_CRIT_ANGLE = 50
-ELEVATION_CRIT_MULTI = 1.5 # How much do we increase by?
 
 #Trying to find a ratio so I don't need to remember the exact way to specify meteor-m2 3
 SATNAME_MATCH_RATIO = 0.89
@@ -297,23 +293,45 @@ class ElMotorControl(threading.Thread):
         #That would require tuning and I know those duty cycle constants more or less work. Only minor adjustments needed.
         movespeed = self.speed # PWM duty cycle is between 0 and 100
 
-        #Needs more duty cycle when at lower elevations to compensate for gravity pulling the dish down.
+        #After testing it seems the minimum PWM value needed to raise the boom from horizontal is 20.
+        #At el45 the minimum PWM val needed to move is 15
+        #At el70 the minimum PWM val needed to move is only 5
         if anglediff > 5:
             pass # no slowdown, 100 duty cycle
         elif anglediff > 2: # Between 5 and 2 degrees, first slowdown
-            movespeed = 45
+            movespeed = 20
         elif anglediff > 1: #Between 1 and 2 degrees, second slowdown
-            movespeed = 35
+            movespeed = 15
         elif anglediff >= self.encoder.ANGLE_TICK*3: #between a degree difference and 3 ANGLE_TICKs
-            movespeed = 25
+            movespeed = 10
         else: # Between 3 ticks and our target we really crawl slowly
-            movespeed = 20 #Slowest move speed possible cant move the elevation axis from 0 or 180
+            movespeed = 5 #Slowest move speed possible cant move the elevation axis from 0 or 180
 
+        #PWM values above are what are needed for smooth movement at nearly horizontal.
+        #The maths below is to tune that value down as the elevation goes up so we end up
+        #around 5 PWM val at the lowest movement speed at vertical elevation and around 20 at
+        #perfectly horizontal.
+        #Tried both, sin changes too much at low elevation and cos changes too much at high elevation
+        angle_compensation = cos(radians(self.encoder.curangle)) * 15
+        movespeed += angle_compensation
+        #After about 50 degrees the compensation values aren't enough and the PWM vals get bigger than they need to be
+        #At 70 degrees we should be at 5 but we aren't
+        #So thats what this -2 is for, its tuned to be about perfect over 60 degrees with this
+        if 60 < angle < 90: #Between 60 degrees and vertical, knock it down a couple numbers to match the required PWM constants found with the tgo command.
+            movespeed -= 2
+
+
+        #angle_compensation = sin(radians(self.encoder.curangle)) * 15
+        #movespeed -= angle_compensation
+
+
+        """
         #Small movements at low elevations are hard to do with normal PWM constants, so we buff them up a bit to help.
         if self.encoder.curangle < ELEVATION_CRIT_ANGLE and anglediff < 5:
             movespeed = round(movespeed * ELEVATION_CRIT_MULTI)
         elif self.encoder.curangle > 80 and anglediff < 5:
             movespeed = round(movespeed * 0.5)
+        """
 
         #Ok now we know what motor to activate and how fast it should move.
         movefun(movespeed)
@@ -326,6 +344,9 @@ class ElMotorControl(threading.Thread):
 
     #This moves the elevation axis towards the blue endstop
     def move_motor_dir1(self, speed=100):
+        #Clamp PWM vals to be safe
+        speed = min(100, speed)
+        speed = max(speed, 0)
         self.EL_motor_PWM_out.ChangeDutyCycle(speed)
         GPIO.output(self.bin1, GPIO.HIGH)
         GPIO.output(self.bin2, GPIO.LOW)
@@ -333,6 +354,8 @@ class ElMotorControl(threading.Thread):
 
     #This moves the elevation axis towards the yellow endstop
     def move_motor_dir2(self, speed=100):
+        speed = min(100, speed)
+        speed = max(speed, 0)
         self.EL_motor_PWM_out.ChangeDutyCycle(speed)
         GPIO.output(self.bin1, GPIO.LOW)
         GPIO.output(self.bin2, GPIO.HIGH)
@@ -851,6 +874,14 @@ def terminal_interface(azmc, elmc):
                     print("Incorrect command structure. Command format is tgo <az|el> <angle> <PWM_val>")
                     continue
                 axis, angle, pwmval = test_command.groups()
+                #Can't compare strings to ints so correct the types
+                try:
+                    angle = float(angle)
+                    pwmval = int(pwmval)
+                except:
+                    print("Error processing arguments to test go command. Probably incorrect arg. Command format is tgo <az|el> <angle> <PWM_val>")
+                    continue
+
                 #Now that we know what axis and angle, we can make sure those values are sane
                 if axis == "az":
                     if abs(angle) > MAX_AZ_INPUT_ANGLE:
