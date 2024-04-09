@@ -1,4 +1,4 @@
-_VERSION_ = "0.76"
+_VERSION_ = "0.77"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -177,6 +177,7 @@ class RotaryEncoder:
 class ElMotorControl(threading.Thread):
     def __init__(self, BIN1=EL_BIN1, BIN2=EL_BIN2, PWMB=EL_PWMB, YELLOW_ENDSTOP=EL_ENDSTOP_YELLOW, BLUE_ENDSTOP=EL_ENDSTOP_BLUE, recovery_data=None):
         super(ElMotorControl, self).__init__()
+        self.name = "ElMotorControlThread"
         self.encoder = RotaryEncoder(EL_POS_OUTA, EL_POS_OUTB, EL_ANGLE_TICK)
         self.bin1 = BIN1
         self.bin2 = BIN2
@@ -317,7 +318,8 @@ class ElMotorControl(threading.Thread):
         #After about 50 degrees the compensation values aren't enough and the PWM vals get bigger than they need to be
         #At 70 degrees we should be at 5 but we aren't
         #So thats what this -2 is for, its tuned to be about perfect over 60 degrees with this
-        if 60 < angle < 90: #Between 60 degrees and vertical, knock it down a couple numbers to match the required PWM constants found with the tgo command.
+        #Between 30 degrees before vertical and vertical, knock it down a couple numbers to match the required PWM constants found with the tgo command.
+        if 60 < self.encoder.curangle < 120:
             movespeed -= 2
 
 
@@ -345,8 +347,7 @@ class ElMotorControl(threading.Thread):
     #This moves the elevation axis towards the blue endstop
     def move_motor_dir1(self, speed=100):
         #Clamp PWM vals to be safe
-        speed = min(100, speed)
-        speed = max(speed, 0)
+        speed = max(min(100, speed), 0)
         self.EL_motor_PWM_out.ChangeDutyCycle(speed)
         GPIO.output(self.bin1, GPIO.HIGH)
         GPIO.output(self.bin2, GPIO.LOW)
@@ -354,8 +355,7 @@ class ElMotorControl(threading.Thread):
 
     #This moves the elevation axis towards the yellow endstop
     def move_motor_dir2(self, speed=100):
-        speed = min(100, speed)
-        speed = max(speed, 0)
+        speed = max(min(100, speed), 0)
         self.EL_motor_PWM_out.ChangeDutyCycle(speed)
         GPIO.output(self.bin1, GPIO.LOW)
         GPIO.output(self.bin2, GPIO.HIGH)
@@ -483,6 +483,7 @@ class ElMotorControl(threading.Thread):
 class AzMotorControl(threading.Thread):
     def __init__(self, AIN1=AZ_AIN1, AIN2=AZ_AIN2, PWMA=AZ_PWMA, he_sensor=AZ_MAG_SENSOR, recovery_data=None):
         super(AzMotorControl, self).__init__()
+        self.name = "AzMotorControlThread"
         self.encoder = RotaryEncoder(AZ_POS_OUTA, AZ_POS_OUTB, AZ_ANGLE_TICK)
         self.ain1 = AIN1
         self.ain2 = AIN2
@@ -1170,6 +1171,12 @@ def terminal_interface(azmc, elmc):
             sleep(0.5)
         except KeyboardInterrupt:
             print("\n")
+            continue
+        except Exception as e:
+            azmc.stop_movement = True
+            elmc.stop_movement = True
+            print("An unexpected error occurred, stopping all motors for safety. You must type 'resume' to allow movement again. Double check your commanded angles first with the 'd' command! The error: ")
+            print(e)
             continue
 
 class SatFinder:
