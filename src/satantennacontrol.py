@@ -66,26 +66,23 @@ MAX_EL_INPUT_ANGLE = 180 #Elevation axis can actually go slightly below 0 or 180
 PWM_FREQUENCY = 2000
 SLOWDOWN_DEGREES = 3 #Slow down when within this many degrees of target
 
-#Roughly how many degrees rotation for each tick. Some maths behind this, don't mess with it if you don't know what you're doing.
-# Ring gear is 58 tooth and encoder gear is 10 tooth, so 5.8:1.
-# And our encoder *should* emit 100 ticks per revolution, but the code we have working emits 400 ticks per revolution.
-# Doesn't matter for our purposes, just have to remember its 400.
-#
-# So now the maths:
-# Our encoder should emit a pulse 400 times per full revolution, so how many degrees per each tick?
-# 360/400 = 0.9 degrees per tick
-#
-# With a gear ratio of 5.8 between our encoder and ring gear, we should expect 5.8*400 encoder ticks per mast revolution.
-# Total ticks per mast revolution = 5.8*400 = 2,320
-# Which means degrees per tick is: 360/2320 ~= 0.15517
-# If we ever want to calculate the current angle from the tick number its:
-# current_tick*ANGLE_TICK
-AZ_ANGLE_TICK = 0.15517
-#Elevation axis uses a 12 tooth and 60 tooth gearset so the math changes slightly:
-#Instead of 5.8, our ratio is 60/12 = 5
-# That means ticks per full revolution is 5*400 = 2000
-#So degrees per tick should be 360/2000 = 0.18
-EL_ANGLE_TICK = 0.18
+#Roughly how many degrees rotation for each tick.
+# Azimuth axis
+AZ_ENCODER_DRIVE_GEAR_T = 10
+AZ_DRIVEN_GEAR_T = 58
+AZ_ENCODER_POINTS = 400 # How many pulses per full rotation of the encoder
+AZ_GEAR_RATIO = AZ_DRIVEN_GEAR_T/AZ_ENCODER_DRIVE_GEAR_T
+AZ_POINTS_PER_MAST_REV = AZ_GEAR_RATIO * AZ_ENCODER_POINTS
+AZ_ANGLE_TICK = 360/AZ_POINTS_PER_MAST_REV
+#AZ_ANGLE_TICK = 0.15517
+# Elevation axis
+EL_ENCODER_DRIVE_GEAR_T = 12
+EL_DRIVEN_GEAR_T = 60
+EL_ENCODER_POINTS = 400
+EL_GEAR_RATIO = EL_DRIVEN_GEAR_T/EL_ENCODER_DRIVE_GEAR_T
+EL_POINTS_PER_MAST_REV = EL_GEAR_RATIO * EL_ENCODER_POINTS
+EL_ANGLE_TICK = 360/EL_POINTS_PER_MAST_REV
+#EL_ANGLE_TICK = 0.18
 #For 0.1 degree accuracy on the Elevation axis we need what tooth count on the encoder wheel?
 # We would need 360/0.1 = 3600 ticks per full revolution
 # For a 400 tick per revolution encoder we need a gear ratio of 3600/400 = 9:1
