@@ -1095,7 +1095,8 @@ def terminal_interface(azmc, elmc):
                     starttime = starttimelocaltz - datetime.now().astimezone()
                     startimetext = create_time_string(starttime.total_seconds())
                     max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
-                    eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
+                    longitude = round(satparams.get_lonlatalt(passdata[2])[0]) #Longitude at max elevation
+                    eastwest = "W" if longitude < self.ANTENNA_GPS_LONG else "E"
                     print("Selected pass #%s, %s%s MEL, starting in %s." % (selectedpass, round(max_location[1]), eastwest, startimetext))
                     #Find the start location for this pass
                     (startaz, startel) = satparams.get_observer_look(passdata[0], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
@@ -1212,9 +1213,9 @@ class SatFinder:
             durationtext = create_time_string((passdata[1] - passdata[0]).total_seconds())
             startimetext = create_time_string(starttime.total_seconds())
             max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
-            eastwest = "E" if max_location[0] < abs(ANTENNA_GPS_LONG) else "W"
             longitude = round(satparams.get_lonlatalt(passdata[2])[0]) #Longitude at max elevation
             longtext = "%s%s" % (abs(longitude), "E" if longitude > 0 else "W")
+            eastwest = "W" if longitude < self.ANTENNA_GPS_LONG else "E"
             #Find the direction. Only way I could think of is to look at the change in azimuth angle and if its going down or up
             #One minute ahead in time should be enough to tell for sure what direction we are going, using max elevation as reference
             p2time = passdata[2] + timedelta(minutes=1)
