@@ -1,4 +1,4 @@
-_VERSION_ = "0.77"
+_VERSION_ = "0.78"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -12,6 +12,7 @@ from pyorbital import orbital
 import threading, re, os, os.path, pytz
 from difflib import SequenceMatcher
 from json import load as json_load
+from json import dump as json_dump
 from json.decoder import JSONDecodeError
 from math import cos, sin, radians
 
@@ -76,8 +77,8 @@ AZ_POINTS_PER_MAST_REV = AZ_GEAR_RATIO * AZ_ENCODER_POINTS
 AZ_ANGLE_TICK = 360/AZ_POINTS_PER_MAST_REV
 #AZ_ANGLE_TICK = 0.15517
 # Elevation axis
-EL_ENCODER_DRIVE_GEAR_T = 12
-EL_DRIVEN_GEAR_T = 60
+EL_ENCODER_DRIVE_GEAR_T = 10
+EL_DRIVEN_GEAR_T = 70
 EL_ENCODER_POINTS = 400
 EL_GEAR_RATIO = EL_DRIVEN_GEAR_T/EL_ENCODER_DRIVE_GEAR_T
 EL_POINTS_PER_MAST_REV = EL_GEAR_RATIO * EL_ENCODER_POINTS
@@ -171,6 +172,9 @@ class RotaryEncoder:
     def getCurrentTick(self): return self.curtick
     def getCurrentAngle(self): return round(self.curangle, 3) #Round curangle to 3 digits to prevent weird scientific notation output for small values near 0
 
+#Not likely but just in case the two threads try to write at the same time
+thread_write_lock = threading.Lock()
+
 class ElMotorControl(threading.Thread):
     def __init__(self, BIN1=EL_BIN1, BIN2=EL_BIN2, PWMB=EL_PWMB, YELLOW_ENDSTOP=EL_ENDSTOP_YELLOW, BLUE_ENDSTOP=EL_ENDSTOP_BLUE, recovery_data=None):
         super(ElMotorControl, self).__init__()
@@ -199,7 +203,7 @@ class ElMotorControl(threading.Thread):
         # screw and nut positions on the mechanical endstops. I think a magnetic endstop would be more precise between the two.
         # Theoretically a nut moves a specific amount per turn, as defined by the thread pitch. So screwing the nuts the
         # same number of times should line them up perfectly, but it doesn't. Manufacturing tolerances arent good enough maybe.
-        self.angle_fuzz = 89.5 #What angle to set to after we go to what we "think" is 90 degrees.
+        self.angle_fuzz = 90 #What angle to set to after we go to what we "think" is 90 degrees.
 
         # New method of moving, instead of being prompted a single angle and moving towards it we will constantly evaluate
         # what the commanded angle is vs our current angle. Speed and direction to be calculated every loop iteration.
@@ -248,7 +252,10 @@ class ElMotorControl(threading.Thread):
     def move_to_commanded_angle(self):
         # This function is constantly called as a background thread, constantly evaluating and commanding movements.
         #Determine which way to turn the motor
-        if self.commanded_angle < self.encoder.curangle:
+        if self.encoder.curangle == self.commanded_angle:
+            self.stop_motor()
+            return
+        elif self.commanded_angle < self.encoder.curangle:
             movefun = self.move_motor_dir1
             endstop = self.blue_endstop
             #Needed sign information for old function but new function probably could get away with abs() instead. This works though so meh.
@@ -257,9 +264,6 @@ class ElMotorControl(threading.Thread):
             movefun = self.move_motor_dir2
             endstop = self.yellow_endstop
             anglesign = 1
-        else: #Commanded angle and current angle are the same, don't do anything. Maybe just make sure motor is stopped...
-            self.stop_motor()
-            return
 
         #Now that we know what endstop to check, lets make sure we havent crashed into it already
         if GPIO.input(endstop) == 0:
@@ -340,6 +344,26 @@ class ElMotorControl(threading.Thread):
         GPIO.output(self.bin1, GPIO.LOW)
         GPIO.output(self.bin2, GPIO.LOW)
         self.is_moving = False
+        self.write_recovery_postion()
+
+    def write_recovery_postion(self):
+        with thread_write_lock:
+            current_recovery_data = {}
+            if os.access(POSITION_RECOVERY_FILE_PATH, os.F_OK):
+                with open(POSITION_RECOVERY_FILE_PATH, "r") as recfile:
+                    try:
+                        current_recovery_data = json_load(recfile)
+                    except:
+                        pass
+            #We should now have a dictionary, possibly with some data in it currently. Doesn't really matter, just save the new data.
+            #Include a timestamp so we know when that data was from
+            current_recovery_data["ElevationDeg"] = self.encoder.curangle
+            current_recovery_data["ElevationTick"] = self.encoder.curtick
+            current_recovery_data["SaveDate"] = datetime.today().strftime('%Y-%m-%d %H:%M:%S.%f')
+            current_recovery_data["Is_Moving"] = False
+            with open(POSITION_RECOVERY_FILE_PATH, "w") as wrecfile:
+                json_dump(current_recovery_data, wrecfile)
+
 
     #This moves the elevation axis towards the blue endstop
     def move_motor_dir1(self, speed=100):
@@ -546,8 +570,10 @@ class AzMotorControl(threading.Thread):
         #Keep the angles between 360
         self.encoder.curangle %= 360
         self.commanded_angle %= 360
+        if self.encoder.curangle == self.commanded_angle:
+            self.stop_motor()
+            return
         #We don't actually use the ticks for tracking so we will keep that the same for now.
-        #Maybe we could even use that tick number to track the true position and unwind later.
         # This function is constantly called as a background thread, constantly evaluating and commanding movements.
         actualdistance = self.commanded_angle - self.encoder.curangle
         #TODO Would a subtick stop check here help the CPU usage much?
@@ -645,6 +671,28 @@ class AzMotorControl(threading.Thread):
         GPIO.output(self.ain1, GPIO.LOW)
         GPIO.output(self.ain2, GPIO.LOW)
         self.is_moving = False
+        #Now we're in position, save that new angle to a recovery file so we can avoid rehoming if power is lost.
+        self.write_recovery_postion()
+
+    def write_recovery_postion(self):
+        with thread_write_lock:
+            current_recovery_data = {}
+            if os.access(POSITION_RECOVERY_FILE_PATH, os.F_OK):
+                with open(POSITION_RECOVERY_FILE_PATH, "r") as recfile:
+                    try:
+                        current_recovery_data = json_load(recfile)
+                    except:
+                        pass
+            #We should now have a dictionary, possibly with some data in it currently. Doesn't really matter, just save the new data.
+            #Include a timestamp so we know when that data was from
+            current_recovery_data["AzimuthDeg"] = self.encoder.curangle
+            current_recovery_data["AzimuthTick"] = self.encoder.curtick
+            current_recovery_data["AzOffset"] = self.manual_offset_diff
+            current_recovery_data["SaveDate"] = datetime.today().strftime('%Y-%m-%d %H:%M:%S.%f')
+            current_recovery_data["Is_Moving"] = False
+            with open(POSITION_RECOVERY_FILE_PATH, "w") as wrecfile:
+                json_dump(current_recovery_data, wrecfile)
+
 
     #Turn clockwise
     def move_motor_dir1(self, speed=100):
@@ -1412,6 +1460,8 @@ def main():
         azmc.join()
         elmc.join()
         GPIO.cleanup()
+        #At this point of the shutdown process we should have properly parked the axis, so we can delete the recovery file.
+        os.remove(POSITION_RECOVERY_FILE_PATH)
 
 
 if __name__ == "__main__":
