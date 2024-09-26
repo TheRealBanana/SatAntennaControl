@@ -213,6 +213,9 @@ class ElMotorControl(threading.Thread):
         self.stop_movement = False # For estop
         self.speed = 100 # So we can modulate move speed from the command line
         self.is_moving = False
+        # Try and prevent the position backup code from writing constantly by tracking changes
+        self.last_save_tick = None
+
 
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_commanded_angle() loop
@@ -347,6 +350,10 @@ class ElMotorControl(threading.Thread):
         self.write_recovery_postion()
 
     def write_recovery_postion(self):
+        # We can track the degrees or the tick number, tick number is far less ambiguous although I doubt we could change
+        # from one angle 360 to the same angle without going through every other number anyway, but eh. Tick number works.
+        if self.last_save_tick == self.encoder.curtick:
+            return
         with thread_write_lock:
             current_recovery_data = {}
             if os.access(POSITION_RECOVERY_FILE_PATH, os.F_OK):
@@ -363,6 +370,7 @@ class ElMotorControl(threading.Thread):
             current_recovery_data["Is_Moving"] = False
             with open(POSITION_RECOVERY_FILE_PATH, "w") as wrecfile:
                 json_dump(current_recovery_data, wrecfile)
+            self.last_save_tick = self.encoder.curtick
 
 
     #This moves the elevation axis towards the blue endstop
@@ -527,6 +535,8 @@ class AzMotorControl(threading.Thread):
         self.speed = 100
         self.is_moving = False
         self.manual_offset_diff = 0 # Track our manual azimuth offset difference so we can park properly
+        # Try and prevent the position backup code from writing constantly by tracking changes
+        self.last_save_tick = None
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_command_angle() loop
     def run(self):
@@ -675,6 +685,8 @@ class AzMotorControl(threading.Thread):
         self.write_recovery_postion()
 
     def write_recovery_postion(self):
+        if self.last_save_tick == self.encoder.curtick:
+            return
         with thread_write_lock:
             current_recovery_data = {}
             if os.access(POSITION_RECOVERY_FILE_PATH, os.F_OK):
@@ -692,6 +704,7 @@ class AzMotorControl(threading.Thread):
             current_recovery_data["Is_Moving"] = False
             with open(POSITION_RECOVERY_FILE_PATH, "w") as wrecfile:
                 json_dump(current_recovery_data, wrecfile)
+            self.last_save_tick = self.encoder.curtick
 
 
     #Turn clockwise
