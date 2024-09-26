@@ -1157,7 +1157,7 @@ def terminal_interface(azmc, elmc):
                     startimetext = create_time_string(starttime.total_seconds())
                     max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
                     longitude = round(satparams.get_lonlatalt(passdata[2])[0]) #Longitude at max elevation
-                    eastwest = "W" if longitude < self.ANTENNA_GPS_LONG else "E"
+                    eastwest = "W" if longitude < ANTENNA_GPS_LONG else "E"
                     print("Selected pass #%s, %s%s MEL, starting in %s." % (selectedpass, round(max_location[1]), eastwest, startimetext))
                     #Find the start location for this pass
                     (startaz, startel) = satparams.get_observer_look(passdata[0], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
