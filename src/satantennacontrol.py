@@ -215,6 +215,8 @@ class ElMotorControl(threading.Thread):
         self.is_moving = False
         # Try and prevent the position backup code from writing constantly by tracking changes
         self.last_save_tick = None
+        # For the command to save position and quit, bypass all the parking code
+        self.bypass_park = False
 
 
 
@@ -247,7 +249,8 @@ class ElMotorControl(threading.Thread):
         self.quitting = True
         #Stop the movement follower function and go to park angle
         self.stop_movement = True
-        self.move_to_angle(EL_PARK_ANGLE)
+        # Allow bypassing parking before quit so we can utilitize a command to save position and quit without moving.
+        if not self.bypass_park: self.move_to_angle(EL_PARK_ANGLE)
         #Stop the PWM channel or it causes problems when quitting python
         #Final app exit will handle the GPIO.cleanup()
         self.EL_motor_PWM_out.stop()
@@ -537,6 +540,8 @@ class AzMotorControl(threading.Thread):
         self.manual_offset_diff = 0 # Track our manual azimuth offset difference so we can park properly
         # Try and prevent the position backup code from writing constantly by tracking changes
         self.last_save_tick = None
+        # For the command to save position and quit, bypass all the parking code
+        self.bypass_park = False
 
     #Start of threaded operation. We'll home the axis and then begin the move_to_command_angle() loop
     def run(self):
@@ -569,9 +574,11 @@ class AzMotorControl(threading.Thread):
     def quitthread(self):
         #If we were called externally then set the internal quitting flag true so the loop can stop
         self.quitting = True
+        #Stop the movement follower function and go to park angle
+        self.stop_movement = True
         #Its super important to properly unwind the mast before stopping until we hav absolute positioning data.
         #Without a proper unwind we could destroy the entire wiring harness.
-        self.unwind_mast()
+        if not self.bypass_park: self.unwind_mast()
         #Stop the PWM channel or it causes problems when quitting python
         #Final app exit will handle the GPIO.cleanup()
         self.AZ_motor_PWM_out.stop()
@@ -874,6 +881,13 @@ def terminal_interface(azmc, elmc):
                     print("Current position of azimuth and elevation is: %s [%s]  -  %s [%s]" % (azmc.encoder.getCurrentAngle(), azmc.encoder.getCurrentTick(), elmc.encoder.getCurrentAngle(), elmc.encoder.getCurrentTick()))
                 else:
                     print("Invalid argument, either 'az' or 'el' should be passed to the position command or nothing at all.")
+
+            elif command == "saveandquit":
+                print("Quitting satcontrol without parking axis, current position will be saved to file for loading on next start.")
+                azmc.bypass_park = True
+                elmc.bypass_park = True
+                inp = "quit"
+                continue
 
             elif command == "u":
                 azmc.unwind_mast()
@@ -1467,14 +1481,13 @@ def main():
     finally:
         print("Satellite Antenna control program exit, cleaning up threads and GPIO...")
         #TODO if we want to be able to quit without moving anything so we can restart with recovery data, these will mess things up.
-        #Will have to check if we're doing a recovery restart here and tell the threads to NOT home/park on quit.
         azmc.quitthread()
         elmc.quitthread()
         azmc.join()
         elmc.join()
         GPIO.cleanup()
         #At this point of the shutdown process we should have properly parked the axis, so we can delete the recovery file.
-        os.remove(POSITION_RECOVERY_FILE_PATH)
+        if not azmc.bypass_park: os.remove(POSITION_RECOVERY_FILE_PATH)
 
 
 if __name__ == "__main__":
