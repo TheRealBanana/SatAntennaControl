@@ -1290,7 +1290,7 @@ class SatFinder:
             max_location = satparams.get_observer_look(passdata[2], ANTENNA_GPS_LONG, ANTENNA_GPS_LAT, ANTENNA_GPS_ALT)
             longitude = round(satparams.get_lonlatalt(passdata[2])[0]) #Longitude at max elevation
             longtext = "%s%s" % (abs(longitude), "E" if longitude > 0 else "W")
-            eastwest = "W" if longitude < self.ANTENNA_GPS_LONG else "E"
+            eastwest = "W" if longitude < ANTENNA_GPS_LONG else "E"
             #Find the direction. Only way I could think of is to look at the change in azimuth angle and if its going down or up
             #One minute ahead in time should be enough to tell for sure what direction we are going, using max elevation as reference
             p2time = passdata[2] + timedelta(minutes=1)
