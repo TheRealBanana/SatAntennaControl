@@ -1,4 +1,4 @@
-_VERSION_ = "0.78"
+_VERSION_ = "0.79"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
