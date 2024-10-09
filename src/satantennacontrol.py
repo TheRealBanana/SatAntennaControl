@@ -1,4 +1,4 @@
-_VERSION_ = "0.79"
+_VERSION_ = "0.80"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -107,7 +107,7 @@ TLEFILEPATH = os.path.join(RUNFOLDER, "weather.txt")
 GPSFILEPATH = os.path.join(RUNFOLDER, "gpscoords.txt")
 #Name of the file to be used for position recovery data. Prefix it with a period to hide it in linux.
 POSITION_RECOVERY_FILE_PATH = os.path.join(RUNFOLDER, ".active_position")
-
+SAVEDATE_TIMESTRING = '%Y-%m-%d %H:%M:%S.%f %Z'
 
 class RotaryEncoder:
     CLOCKWISE=1
@@ -369,7 +369,7 @@ class ElMotorControl(threading.Thread):
             #Include a timestamp so we know when that data was from
             current_recovery_data["ElevationDeg"] = self.encoder.curangle
             current_recovery_data["ElevationTick"] = self.encoder.curtick
-            current_recovery_data["SaveDate"] = datetime.today().strftime('%Y-%m-%d %H:%M:%S.%f')
+            current_recovery_data["SaveDate"] = datetime.today().astimezone().strftime(SAVEDATE_TIMESTRING)
             current_recovery_data["Is_Moving"] = False
             with open(POSITION_RECOVERY_FILE_PATH, "w") as wrecfile:
                 json_dump(current_recovery_data, wrecfile)
@@ -550,10 +550,11 @@ class AzMotorControl(threading.Thread):
             self.find_home()
             print("\n\n")
         else:
-            print("Bypassing homing and using recovery data on the azimuth axis. Pos: %s [%s]" % (self.recovery_data["AzimuthDeg"], self.recovery_data["AzimuthTick"]))
+            print(f"Bypassing homing and using recovery data on the azimuth axis. Pos: {self.recovery_data["AzimuthDeg"]} [{self.recovery_data["AzimuthTick"]}] - Offset {self.recovery_data["AzOffset"]}")
             self.encoder.curangle = self.recovery_data["AzimuthDeg"]
             self.commanded_angle = self.encoder.curangle
             self.encoder.curtick = self.recovery_data["AzimuthTick"]
+            self.manual_offset_diff = self.recovery_data["AzOffset"]
             self.homed = True
         #Would 10 loop iterations a second really be too slow? Maybe 50?
         #100 per second uses about 10% CPU on the pi4 which is kinda crazy.
@@ -707,7 +708,7 @@ class AzMotorControl(threading.Thread):
             current_recovery_data["AzimuthDeg"] = self.encoder.curangle
             current_recovery_data["AzimuthTick"] = self.encoder.curtick
             current_recovery_data["AzOffset"] = self.manual_offset_diff
-            current_recovery_data["SaveDate"] = datetime.today().strftime('%Y-%m-%d %H:%M:%S.%f')
+            current_recovery_data["SaveDate"] = datetime.today().astimezone().strftime(SAVEDATE_TIMESTRING)
             current_recovery_data["Is_Moving"] = False
             with open(POSITION_RECOVERY_FILE_PATH, "w") as wrecfile:
                 json_dump(current_recovery_data, wrecfile)
@@ -1411,7 +1412,7 @@ def check_for_recovery_data():
     recovery_data = None
     if os.access(POSITION_RECOVERY_FILE_PATH, os.F_OK):
         print("Found active position data file, checking...")
-        with open(POSITION_RECOVERY_FILE_PATH) as saved_position_file:
+        with open(POSITION_RECOVERY_FILE_PATH, 'r') as saved_position_file:
             # Example line:
             # { "AzimuthDeg": 211.813, "AzimuthTick": -955, "ElevationDeg": 45.58, "ElevationTick": 253, "Is_Moving": false }
             try:
@@ -1430,6 +1431,9 @@ def check_for_recovery_data():
         if all(k in actual_keys for k in needed_keys):
             #Keys are valid, now lets check if the values are valid, they should all be floats or ints and the last a bool
             ismoving = posdata.pop("Is_Moving")
+            # This broke when I added the SaveDate string field, so lets just get rid of that for now
+            if "SaveDate" in posdata: savedate = posdata.pop("SaveDate")
+            else: savedate = "None"
             if all([isinstance(t, (int, float)) for t in posdata.values()]):
                 #Add the ismoving back on
                 posdata["Is_Moving"] = ismoving
@@ -1437,6 +1441,7 @@ def check_for_recovery_data():
                 #all the recovery data is hand-written at first anyway since theres no saving functions.
                 print("Recovery data passed basic checks. Here's what we got:\n")
                 for k,v in posdata.items(): print("%s:\t%s" % (k,v))
+                print(f"SaveDate:\t{savedate}")
                 print("\n")
                 goodyn = '.'
                 while goodyn not in "yn":
