@@ -550,7 +550,7 @@ class AzMotorControl(threading.Thread):
             self.find_home()
             print("\n\n")
         else:
-            print(f"Bypassing homing and using recovery data on the azimuth axis. Pos: {self.recovery_data["AzimuthDeg"]} [{self.recovery_data["AzimuthTick"]}] - Offset {self.recovery_data["AzOffset"]}")
+            print(f"""Bypassing homing and using recovery data on the azimuth axis. Pos: {self.recovery_data["AzimuthDeg"]} [{self.recovery_data["AzimuthTick"]}] - Offset {self.recovery_data["AzOffset"]}""")
             self.encoder.curangle = self.recovery_data["AzimuthDeg"]
             self.commanded_angle = self.encoder.curangle
             self.encoder.curtick = self.recovery_data["AzimuthTick"]
