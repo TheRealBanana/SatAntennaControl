@@ -1,4 +1,4 @@
-_VERSION_ = "0.80"
+_VERSION_ = "0.81"
 
 #Seems like one of the libraries is slowing down startup so for now I'm just printing so I know whether its the
 #program or the pi having issues. Probably the pyorbital library.
@@ -307,13 +307,13 @@ class ElMotorControl(threading.Thread):
         if anglediff > 5:
             pass # no slowdown, 100 duty cycle
         elif anglediff > 2: # Between 5 and 2 degrees, first slowdown
-            movespeed = 20
+            movespeed = 30
         elif anglediff > 1: #Between 1 and 2 degrees, second slowdown
-            movespeed = 15
+            movespeed = 25
         elif anglediff >= self.encoder.ANGLE_TICK*3: #between a degree difference and 3 ANGLE_TICKs
-            movespeed = 10
+            movespeed = 20
         else: # Between 3 ticks and our target we really crawl slowly
-            movespeed = 5 #Slowest move speed possible cant move the elevation axis from 0 or 180
+            movespeed = 15 #Slowest move speed possible cant move the elevation axis from 0 or 180
 
         #PWM values above are what are needed for smooth movement at nearly horizontal.
         #The maths below is to tune that value down as the elevation goes up so we end up
@@ -837,7 +837,7 @@ def loadgpscoords():
                     match m.group(1):
                         case "LAT": ANTENNA_GPS_LAT = float(m.group(2))
                         case "LONG": ANTENNA_GPS_LONG = float(m.group(2))
-                        case "ALT": ANTENNA_GPS_ALT = float(m.group(2))
+                        case "ALT": ANTENNA_GPS_ALT = float(m.group(2))/1000 # We need the altitude in km, but we like to use meters.
                     print("Set GPS coords: %s to %s" % (m.group(1), m.group(2)))
     else:
         print("No gpscoords.txt file to load from, using defaults.")
@@ -1117,6 +1117,10 @@ def terminal_interface(azmc, elmc):
                 print("Motor movement status (AZ, EL): (%s, %s)" % (str(azmc.is_moving), str(elmc.is_moving)))
                 print("E-Stop Status: AZ:%s  - EL:%s" % (str(azmc.stop_movement), str(elmc.stop_movement)))
                 print("Manual azimuth offset: %s degrees" % azmc.manual_offset_diff)
+                print("Current GPS Coords:")
+                print(f"Lat: {ANTENNA_GPS_LAT}")
+                print(f"Long: {ANTENNA_GPS_LONG}")
+                print(f"Alt (km): {ANTENNA_GPS_ALT}")
 
             elif command == "v" or command == "version":
                 print("Satellite Antenna Control version %s" % _VERSION_)
